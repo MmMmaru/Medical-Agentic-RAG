@@ -1,0 +1,1 @@
+vllm serve --config MMRAG/DB/config.yaml

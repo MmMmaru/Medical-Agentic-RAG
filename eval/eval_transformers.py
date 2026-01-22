@@ -3,6 +3,7 @@ import re
 import torch
 import dotenv
 import time
+import os
 dotenv.load_dotenv()
 
 huggingface_token = os.getenv("HF_TOKEN")
@@ -23,7 +24,7 @@ def load_dataset(file_path = "datasets/MedQA/data_clean/questions/Mainland/train
 def load_model():
     import torch
     from transformers import AutoProcessor, AutoModelForImageTextToText
-    MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
+    MODEL_ID = os.getcwd()+"/.cache/modelscope/models/qwen/Qwen3-VL-Embedding-2B"
     processor = AutoProcessor.from_pretrained(MODEL_ID)
     model = AutoModelForImageTextToText.from_pretrained(
         MODEL_ID,
