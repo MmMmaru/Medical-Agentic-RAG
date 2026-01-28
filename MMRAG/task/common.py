@@ -8,7 +8,13 @@ You may choose one of the following tasks to create the query:
 Content:
 {content}
 
-Refined Medical Query:
+Return your response in the following JSON format:
+{{
+    "question": "your refined medical query here",
+    "key_words": "list of key medical terms extracted from the content"
+}}
+
+Refined Medical Query (JSON):
 """
 
 REWRITE_CONTENT_PROMPT = """
@@ -21,5 +27,32 @@ This summary will be used as the searchable content in a medical vector database
 Question:
 {question}
 
-Comprehensive Medical Case Description:
+Return your response in the following JSON format:
+{{
+    "content": "comprehensive medical case description here",
+    "key_words": "list of key medical terms extracted from the question and case"
+}}
+
+Comprehensive Medical Case Description (JSON):
+"""
+
+REWRITE_CONTENT_QUESTION_PROMPT ="""
+You are a medical expert. Your task is to refine and rewrite the medical question based on the provided content context.
+Analyze the content and generate an improved version of the original question that is:
+1. More precise and clinically relevant
+2. Better aligned with the medical context provided
+3. Clear and professional in medical terminology
+
+Content:
+{content}
+
+
+Return your response in the following JSON format:
+{{
+    "question": "your refined medical question here",
+    "content": "refine content to form report of the case here, including details such as image findings, clinical context, and relevant medical terms",
+    "key_words": "list of key medical terms extracted from the question"
+}}
+
+Refined Question (JSON):
 """

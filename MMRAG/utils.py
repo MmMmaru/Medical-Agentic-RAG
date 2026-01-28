@@ -56,12 +56,6 @@ def extract_catogorical_answer(text: str) -> str:
     final_answer = re.search(r"\b([A-E])\b", given_answer)
     return final_answer.group(1) if final_answer else ""
 
-def extract_catogorical_answer(text: str) -> str:
-    """Return A/B/C/D if found in model output, else ''."""
-    content_match = re.search(r"<answer>(.*?)</answer>", text)
-    given_answer = content_match.group(1).strip() if content_match else text.strip()
-
-    return given_answer if given_answer else ""
 
 def encode_image_paths_to_base64(image_paths, content_format = "image_url"):
 	"encode image paths to base64 strings"

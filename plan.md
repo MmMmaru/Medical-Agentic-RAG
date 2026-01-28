@@ -7,7 +7,7 @@ qwen3-vl-4B, medgemma-4B
 基于MedVL-thinker和Med-Max数据集
 放射学 - IU-Xray
 眼科学 - Harvard-FairVLMed
-病理学 - quilt-1M, PMC-OA
+病理学 - PMC-OA
 # benchmark
 - 文本：MedQA, MMLU-med
 - 图像分类：mimic-cxr,chestX-ray14
