@@ -1,12 +1,13 @@
 import asyncio
 import os
 import numpy as np
-from ..utils import logger
-from pymilvus import MilvusClient, DataType, CollectionSchema, FieldSchema  # type: ignore
+from utils import logger
+import faiss
+import json
 
-from MMRAG.base import TextChunk
+from base import DataChunk
 
-class PersistentVectorStorage():
+class FaissVectorStorage():
     """支持持久化的向量存储实现"""
     
     def __init__(
@@ -28,7 +29,7 @@ class PersistentVectorStorage():
         # 加载已有数据
         self._load_from_disk()
     
-    async def upsert(self, chunks: list[TextChunk]) -> None:
+    async def upsert(self, chunks: list[DataChunk]) -> None:
         """插入/更新文本块"""
         # 1. 提取向量
         vectors = np.array([chunk.vector for chunk in chunks])
@@ -42,7 +43,7 @@ class PersistentVectorStorage():
         for i, chunk in enumerate(chunks):
             chunk_id = chunk.id
             self.metadata[chunk_id] = {
-                "id": chunk.id,
+                "chunk_id": chunk.id,
                 "content": chunk.content,
                 "doc_id": chunk.doc_id,
                 "chunk_index": chunk.chunk_index,
@@ -56,7 +57,7 @@ class PersistentVectorStorage():
             await self.save_to_disk()
             self.operation_counter = 0
     
-    async def search(self, query_vector: list[float], top_k: int = 5) -> list[TextChunk]:
+    async def search(self, query_vector: list[float], top_k: int = 5) -> list[DataChunk]:
         """向量检索"""
         if self.index is None or self.index.ntotal == 0:
             return []
@@ -72,7 +73,7 @@ class PersistentVectorStorage():
                 continue
             chunk_id = list(self.metadata.keys())[idx]
             chunk_data = self.metadata[chunk_id]
-            results.append(TextChunk(
+            results.append(DataChunk(
                 id=chunk_data["id"],
                 content=chunk_data["content"],
                 vector=None,  # 节省内存，不返回向量

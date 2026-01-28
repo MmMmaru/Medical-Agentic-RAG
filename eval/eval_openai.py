@@ -96,7 +96,7 @@ async def main():
     out_file: str = "preds.json"
     batch_size: int = 128
     cot: bool = True
-    dataset_size = 4
+    dataset_size = 100
     num_proc: int = 16
 
     # Configure OpenAI client for local vLLM server
@@ -119,7 +119,7 @@ async def main():
         num_proc=num_proc,
         desc="Resizing images to fit Qwen2.5-VL requirements",
     )
-
+    print(f"Loaded {len(ds)} examples from {dataset_name}.")
     async def process_example(idx: int, ex: dict) -> dict:
         img: Image.Image = ex["images"][0]  # PIL Image
         b64_img = pil_to_base64(img)
