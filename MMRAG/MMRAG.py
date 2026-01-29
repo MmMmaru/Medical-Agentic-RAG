@@ -162,7 +162,8 @@ class MMRAG:
         logger.info("RAG system shutdown complete")
 
     def delete_rag(self):
-        os.delete_tree(self.workspace)
+        # TODO: delete workspace folder
+        os.delete(self.workspace)
         logger.info("Deleted RAG workspace")
 
 async def main():
