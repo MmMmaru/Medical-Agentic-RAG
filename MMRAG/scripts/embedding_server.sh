@@ -1,5 +1,5 @@
 export CUDA_VISIBLE_DEVICES=0
-vllm serve .cache/modelscope/models/qwen/Qwen3-VL-Embedding-2B \
+vllm serve Qwen/Qwen3-VL-Embedding-2B \
     --host 127.0.0.1 \
     --port 8001 \
     --uvicorn-log-level info \

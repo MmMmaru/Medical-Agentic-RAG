@@ -36,7 +36,7 @@ document是image+report
 主要指标：
 Recall@k:
     准备一个测试集 (Query, Gold_Document_ID)，计算你的模型 Top-5 或 Top-10 检索结果中包含 Gold_Document_ID 的比例。
-MRR:
+MRR(mean reciprocal rank):
     正确文档的（1/Rank）
     计算测试集中每个查询的平均倒数排名 (Mean Reciprocal Rank)，反映模型在检索任务中的整体表现。
 

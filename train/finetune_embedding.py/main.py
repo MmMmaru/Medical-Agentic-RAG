@@ -16,6 +16,8 @@ from torch.distributed.fsdp import (
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy, transformer_auto_wrap_policy
 import functools
 
+from qwen3_vl_embedding import Qwen3VLEmbedder
+
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 # from MMRAG.utils import logger # Avoid import issues if not set up
@@ -65,44 +67,6 @@ class ContrastiveLoss(nn.Module):
             
         return self.cross_entropy(sim_matrix, labels)
 
-class QwenVLEmbeddingWrapper(nn.Module):
-    def __init__(self, model_path):
-        super().__init__()
-        # Load config first to check
-        self.model = Qwen2VLModel.from_pretrained(
-            model_path, 
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
-            attn_implementation="flash_attention_2"
-        )
-        self.model.gradient_checkpointing_enable()
-
-    def forward(self, input_ids, attention_mask, pixel_values=None, image_grid_thw=None):
-        outputs = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            pixel_values=pixel_values,
-            image_grid_thw=image_grid_thw
-        )
-        # Use last hidden state of the last token (EOS) or mean pooling
-        # Assuming the last token is EOS or representative
-        last_hidden_state = outputs.last_hidden_state
-        
-        # Extract embedding from the last token
-        # input_ids shape: (batch, seq_len)
-        # Gather the last non-padding token
-        # For simplicity, if left-padded or right-padded, we need attention mask
-        # Here we assume standard right-padding, so we take the last token that is attended
-        
-        # Check if eos_token is at the end?
-        # Let's do Mean Pooling masked by attention mask for robust embedding
-        mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-        sum_embeddings = torch.sum(last_hidden_state * mask, dim=1)
-        sum_mask = torch.clamp(mask.sum(dim=1), min=1e-9)
-        embedding = sum_embeddings / sum_mask
-        
-        return embedding
-
 class MixedModalDataset(Dataset):
     def __init__(self, data_path, processor):
         self.data = [] # Load from data_path
@@ -142,6 +106,44 @@ def collate_fn(batch, processor):
     return query_inputs, pos_inputs
 
 def main():
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_path', required=True, default="Qwen/Qwen3-VL-Embedding-2B", help="path to model")
+    parser.add_argument('--train_data', required=True, type=str, help="path to tokenized train data")
+    parser.add_argument('--val_data', default="", type=str, help="path to tokenized val data")
+
+    parser.add_argument('--ckpt', required=True, type=str, help="finetuning checkpoint")
+    parser.add_argument('--ds', required=True, type=str, help="deepspeed config")
+    parser.add_argument('--output_dir', required=True, type=str, help="output directory")
+
+    parser.add_argument('--resume', default=False, action='store_true', help='resume from the last checkpoint')         
+
+    parser.add_argument('--lora', default=False, action='store_true', help='lora finetuning')         
+    parser.add_argument('--lora_r', type=int, default=16, help="lora r")         
+    parser.add_argument('--lora_alpha', type=int, default=16, help="lora alpha")         
+    parser.add_argument('--lora_dropout', type=float, default=0.05, help="lora dropout")         
+
+    parser.add_argument('--lr', type=float, default=1e-5, help="learning rate")         
+    parser.add_argument('--epoch', type=int, default=1, help="num of epochs")         
+    parser.add_argument('--grad_acc', type=int, default=1, help="gradient accumulation steps")         
+    parser.add_argument('--steps', type=int, default=-1, help="num of training steps")         
+    parser.add_argument('--bs', type=int, default=1, help="per device batch size")         
+    parser.add_argument('--save_strategy', default="no", type=str, choices=["no", "epoch", "steps"], help="save strategy")
+    parser.add_argument('--save_steps', type=float, default=0.1, help="save checkpoints every save_steps of the training run")         
+    parser.add_argument('--logging_steps', type=float, default=0.001, help="logging at every logging_steps of the total training steps")         
+    parser.add_argument('--eval_steps', type=float, default=0.1, help="evaluate at every evaluation steps of the total training steps")         
+    parser.add_argument('--warmup_ratio', type=float, default=0.0, help="warmup ratio")         
+    parser.add_argument('--lr_scheduler', default="cosine", type=str, help="lr scheduler")
+
+    parser.add_argument('--bf16', default=False, action='store_true', help='bf16')         
+    parser.add_argument('--fp16', default=False, action='store_true', help='fp16')         
+
+    parser.add_argument('--wandb', default=False, action='store_true', help='wandb or not')         
+    parser.add_argument('--wandb_entity', default="", type=str, help='wandb entity')         
+    parser.add_argument('--name', default="", type=str, help="wandb experiment name")
+
+    args = parser.parse_args()
+
     setup()
     rank = dist.get_rank()
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -156,8 +158,7 @@ def main():
         print(f"Loading model from {model_path}")
 
     # 1. Model & Processor
-    processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
-    model = QwenVLEmbeddingWrapper(model_path)
+    model = Qwen3VLEmbedder(args.model_path)
     
     # 2. FSDP Wrap
     # Identify transformer layers for auto wrap
