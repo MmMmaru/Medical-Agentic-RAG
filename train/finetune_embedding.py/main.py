@@ -15,6 +15,7 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy, transformer_auto_wrap_policy
 import functools
+import argparse
 
 from qwen3_vl_embedding import Qwen3VLEmbedder
 
@@ -36,36 +37,32 @@ class ContrastiveLoss(nn.Module):
         super().__init__()
         self.temperature = temperature
         self.cross_entropy = nn.CrossEntropyLoss()
+        self.delta = 0.1
 
-    def forward(self, query_embeds, pos_embeds, neg_embeds=None):
+    def forward(self, query_embeds, doc_embeds):
         """
         Args:
             query_embeds: (batch_size, dim)
-            pos_embeds: (batch_size, dim)
-            neg_embeds: (batch_size, num_neg, dim) or None
+            doc_embeds: (batch_size, dim)
         """
-        # Normalize
-        query_embeds = torch.nn.functional.normalize(query_embeds, p=2, dim=-1)
-        pos_embeds = torch.nn.functional.normalize(pos_embeds, p=2, dim=-1)
-        
+        B,D = query_embeds.shape
         # Positive logits: (batch_size, 1)
         # l_pos = (query_embeds * pos_embeds).sum(dim=-1, keepdim=True) / self.temperature
         
         # In-batch negatives calculation
         # Similarity matrix: (batch_size, batch_size)
-        sim_matrix = torch.matmul(query_embeds, pos_embeds.t()) / self.temperature
+        sim_matrix = torch.matmul(query_embeds, doc_embeds.t())
         
-        labels = torch.arange(query_embeds.size(0), device=query_embeds.device)
-        
-        # If we have hard negatives
-        if neg_embeds is not None:
-            # neg_embeds: (batch_size, num_neg, dim)
-            # l_neg = (query_embeds.unsqueeze(1) * neg_embeds).sum(dim=-1) / self.temperature
-            # logits = torch.cat([l_pos, l_neg], dim=1)
-            # labels = torch.zeros(logits.size(0), dtype=torch.long, device=logits.device)
-            pass # TODO: Implement explicit hard negative logic merging with in-batch
+        logits = torch.diag(sim_matrix, 0)
+        sim_matrix[torch.arange(B), torch.arange(B)] = 0
+        hard_negatives = torch.topk(sim_matrix, 10, dim=-1)
+        hard_negatives = torch.where(hard_negatives > logits + self.delta, hard_negatives, 0)
+
+        exp_logits = torch.exp(logits/self.temperature)
+        denominator = torch.exp(hard_negatives/self.temperature).sum(-1) + exp_logits
+        infoNCE_loss = -torch.mean(torch.log(exp_logits/denominator))
             
-        return self.cross_entropy(sim_matrix, labels)
+        return infoNCE_loss
 
 class MixedModalDataset(Dataset):
     def __init__(self, data_path, processor):
@@ -84,13 +81,6 @@ class MixedModalDataset(Dataset):
     
     def __getitem__(self, idx):
         item = self.data[idx]
-        # Process query
-        query_text = item["query_text"]
-        # Process positive (text + optional image)
-        pos_text = item["pos_text"]
-        
-        # We need to process independently? Or return raw texts to be collated?
-        # Better to return raw and collate in batch
         return item
 
 def collate_fn(batch, processor):

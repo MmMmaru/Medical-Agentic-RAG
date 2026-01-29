@@ -1,5 +1,6 @@
 # torch==2.7.0+cu12.8
 
+qwen-vl-utils>=0.0.14
 datasets
 requests
 Pillow
