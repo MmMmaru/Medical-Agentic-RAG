@@ -1,0 +1,14 @@
+# torch==2.7.0+cu12.8
+
+datasets
+requests
+Pillow
+numpy
+pymilvus
+vllm
+python-dotenv
+openai
+transformers
+click
+tqdm
+huggingface_hub
