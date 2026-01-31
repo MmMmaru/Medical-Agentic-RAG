@@ -12,6 +12,7 @@ import sys
 # if project_root not in sys.path:
 #     sys.path.insert(0, project_root)
 
+from data.medmax import MedMaxDataset
 from model_service.embedding_service import EmbeddingService, OpenaiEmbeddingService
 from model_service.vlm_service import VLMService
 from DB.milvus_vectorDB import MilvusVectorStorage
@@ -65,32 +66,10 @@ class MMRAG:
 
     async def ainit_rag(self):
         dir_list = [
-            "UCSC-VLAA/MedVLThinker-Eval",
+            "datasets/preprocessed_dataset/medmax",
         ]
         for dir_name in dir_list:
             await self.ingest_dataset(dir_name, dataset_size=100)
-
-    def _process_dataset(self, dataset, dataset_size: str = None, filter: str = None) -> list[DataChunk]:
-        """处理数据集，返回文本块列表"""
-        if dataset_size is not None:
-            dataset = dataset.select(range(int(dataset_size)))
-        workspace_folder = self.workspace
-        os.makedirs(os.path.join(workspace_folder, "images"), exist_ok=True)
-
-        def form_content(ex):
-            # 处理单个样本
-            ex['content'] = ex['question'] + "<image>\nAnswer:" + ex['answer']
-            
-            ex['chunk_id'] = compute_mdhash_id(ex['content'], prefix="chunk_")
-            image_paths = []
-            for idx, image in enumerate(ex['images']):
-                image_path = os.path.join(workspace_folder, "images", f"{ex['chunk_id']}_img{idx}.jpeg")
-                image.save(image_path)
-                image_paths.append(image_path)
-            ex['image_paths'] = image_paths
-            return ex
-        
-        return dataset.map(form_content, num_proc=4)
     
     async def ingest_dataset(self, dataset_name: str, dataset_size: int = None, filter: str = None) -> None:
         """文档入库（带持久化）"""
@@ -181,6 +160,25 @@ async def main():
     results = await RAG.retrieve(query, top_k=5)
     for r in results:
         print(f'score: {r.metadata.get("score")}: {r.content}...')
+    
+    # test recall@5 and MRR on 200
+    dataset_size = 200
+    dataset = MedMaxDataset("datasets/preprocessed_datasets/medmax", dataset_size)
+    recall_5_score = 0
+    MRR_score = 0
+    for i in range(len(dataset)):
+        item = dataset[i]
+        query = item['question']
+        results = await RAG.retrieve(query, top_k=5)
+        recall_score = 0
+        local_mrr_score = 0
+        for local_index, r in enumerate(results):
+            if r.chunk_id == item['chunk_id']:
+                recall_score = 1
+                local_mrr_score = 1/(local_index+1)
+        recall_5_score += recall_score
+        MRR_score += local_mrr_score
+    print(f"recall@5: {recall_5_score / dataset_size}, MRR: {MRR_score / dataset_size}")
 
 if __name__ == "__main__":
     asyncio.run(main())
