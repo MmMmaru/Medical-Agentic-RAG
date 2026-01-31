@@ -54,5 +54,4 @@ Return your response in the following JSON format:
     "key_words": "list of key medical terms extracted from the question"
 }}
 
-Refined Question (JSON):
 """
