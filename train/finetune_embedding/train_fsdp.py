@@ -16,21 +16,25 @@ from torch.distributed.fsdp import (
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy, transformer_auto_wrap_policy
 import functools
 import argparse
+from peft import LoraConfig, PeftModel, get_peft_model
+from datasets import load_from_disk
 
-from qwen3_vl_embedding import Qwen3VLEmbedder
+from qwen3_vl_embedding import Qwen3VLForEmbedding, Qwen3VLEmbeddingProcessor
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 # from MMRAG.utils import logger # Avoid import issues if not set up
 
-def setup():
-    """Initialize distributed environment"""
-    dist.init_process_group("nccl")
-    torch.cuda.set_device(dist.get_rank())
-
 def cleanup():
     """Destroy distributed process group"""
     dist.destroy_process_group()
+
+def load_lora_model(model_name, peft_config=None):
+    model = Qwen3VLForEmbedding.from_pretrained(model_name)
+    processor = Qwen3VLEmbeddingProcessor(model_name)
+    if peft_config is not None:
+        model = get_peft_model(model, peft_config)
+    return model, processor
 
 class ContrastiveLoss(nn.Module):
     def __init__(self, temperature=0.05):
@@ -55,7 +59,7 @@ class ContrastiveLoss(nn.Module):
         
         logits = torch.diag(sim_matrix, 0)
         sim_matrix[torch.arange(B), torch.arange(B)] = 0
-        hard_negatives = torch.topk(sim_matrix, 10, dim=-1)
+        hard_negatives = torch.topk(sim_matrix, 10, dim=-1)[0]
         hard_negatives = torch.where(hard_negatives > logits + self.delta, hard_negatives, 0)
 
         exp_logits = torch.exp(logits/self.temperature)
@@ -66,39 +70,39 @@ class ContrastiveLoss(nn.Module):
 
 class MixedModalDataset(Dataset):
     def __init__(self, data_path, processor):
-        self.data = [] # Load from data_path
         self.processor = processor
-        # Placeholder data generation
-        for _ in range(100):
-            self.data.append({
-                "query_text": "Describe this chest x-ray.",
-                "pos_text": "The chest x-ray shows clear lungs.",
-                "pos_image": None # Optional path
-            })
-    
+        self.dataset = load_from_disk(data_path) # 
+        self.system_prompt = "You are an helpful assistant"
+
     def __len__(self):
-        return len(self.data)
+        return len(self.dataset)
     
     def __getitem__(self, idx):
-        item = self.data[idx]
-        return item
+        item = self.dataset[idx]
+        return item # Dict[str, str]
 
 def collate_fn(batch, processor):
-    # Prepare queries
-    queries = [b['query_text'] for b in batch]
-    query_inputs = processor(text=queries, padding=True, return_tensors="pt")
     
-    # Prepare positives
-    pos_texts = [b['pos_text'] for b in batch]
-    # Handle images if present...
-    pos_inputs = processor(text=pos_texts, padding=True, return_tensors="pt")
-    
-    return query_inputs, pos_inputs
+    doc_items = [{
+        "text": item['content'],
+        "image": item["image_paths"]
+    }for item in batch]
+
+    query_items = [{
+        "text": item['question']
+    }for item in batch]
+    doc_inputs = processor.process(doc_items)
+    query_inputs = processor.process(query_items)
+
+    return {
+        "query": query_inputs,
+        "doc": doc_inputs
+    }
 
 def main():
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', required=True, default="Qwen/Qwen3-VL-Embedding-2B", help="path to model")
+    parser.add_argument('--model_name', required=True, default="Qwen/Qwen3-VL-Embedding-2B", help="path or name to model")
     parser.add_argument('--train_data', required=True, type=str, help="path to tokenized train data")
     parser.add_argument('--val_data', default="", type=str, help="path to tokenized val data")
 
@@ -134,22 +138,24 @@ def main():
 
     args = parser.parse_args()
 
-    setup()
+    dist.init_process_group("nccl")
     rank = dist.get_rank()
     local_rank = int(os.environ["LOCAL_RANK"])
-    
-    model_path = os.path.expanduser("~/.cache/modelscope/models/qwen/Qwen3-VL-Embedding-2B")
-    # Fallback to local path if needed or handle download
-    if not os.path.exists(model_path):
-        # assume it's in current dir for demo or pass via env
-        model_path = "Qwen/Qwen2-VL-2B-Instruct" # Placeholder for actual name
+    torch.cuda.set_device(local_rank)
+    device = f"cuda:{local_rank}"
 
-    if rank == 0:
-        print(f"Loading model from {model_path}")
-
+    peft_config = None
+    if args.lora:
+        peft_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "up_proj", "down_proj","gate_proj"],
+            task_type="CAUSAL_LM",
+        )
     # 1. Model & Processor
-    model = Qwen3VLEmbedder(args.model_path)
-    
+    model, processor = load_lora_model(args.model_name, peft_config)
+
     # 2. FSDP Wrap
     # Identify transformer layers for auto wrap
     # For Qwen2VL, the layer class is usually Qwen2VLDecoderLayer
@@ -174,14 +180,14 @@ def main():
     )
 
     optimizer = optim.AdamW(model.parameters(), lr=2e-5, weight_decay=0.01)
-    criterion = ContrastiveLoss()
-
+    criterion = ContrastiveLoss().to(device)
+    
     # 3. Data
-    dataset = MixedModalDataset("./datasets/processed_datasets", processor)
+    dataset = MixedModalDataset(args.train_data, processor)
     sampler = DistributedSampler(dataset, rank=rank)
     dataloader = DataLoader(
         dataset, 
-        batch_size=4, 
+        batch_size=64, 
         sampler=sampler, 
         collate_fn=functools.partial(collate_fn, processor=processor)
     )
@@ -192,22 +198,16 @@ def main():
     
     for epoch in range(num_epochs):
         sampler.set_epoch(epoch)
-        for step, (query_inputs, pos_inputs) in enumerate(dataloader):
+        for step, inputs in enumerate(dataloader):
             optimizer.zero_grad()
-            
-            # Move to device
-            q_ids = query_inputs['input_ids'].to(local_rank)
-            q_mask = query_inputs['attention_mask'].to(local_rank)
-            
-            p_ids = pos_inputs['input_ids'].to(local_rank)
-            p_mask = pos_inputs['attention_mask'].to(local_rank)
-            
+            query_inputs = {k: v.to(device) for k,v in inputs['query'].items()}
+            doc_inputs = {k: v.to(device) for k,v in inputs['doc'].items()}
             # Forward
             # Note: We need to run forward twice: once for queries, once for docs
-            q_embeds = model(q_ids, q_mask)
-            p_embeds = model(p_ids, p_mask)
+            query_embed = model(**query_inputs)
+            doc_embed = model(**doc_inputs)
             
-            loss = criterion(q_embeds, p_embeds)
+            loss = criterion(query_embed, doc_embed)
             
             loss.backward()
             optimizer.step()

@@ -18,13 +18,13 @@ import sys
 
 if __name__ == "__main__":
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model_service.vlm_service import OpenAIVLMService
-from utils import compute_mdhash_id, extract_catogorical_answer, logger, encode_image_paths_to_base64
+
+from MMRAG.model_service.vlm_service import OpenAIVLMService
+from MMRAG.utils import compute_mdhash_id, extract_catogorical_answer, logger, encode_image_paths_to_base64
 
 class MedMaxDataset(Dataset):
-    def __init__(self, dataset_name, vlm_service, dataset_size=None):
+    def __init__(self, dataset_name, dataset_size=None):
         super().__init__()
-        self.vlm_service = vlm_service
         self.dataset_name = dataset_name
         self.dataset_path = f"./datasets/processed_datasets/{self.dataset_name}"
         if os.path.exists(self.dataset_path):
@@ -33,12 +33,13 @@ class MedMaxDataset(Dataset):
         else:
             self.dataset = None
     
-    def process_dataset(self, dataset_size=None, rewrite=True):
+    @staticmethod
+    def process_dataset(dataset_name, output_path, vlm_service, dataset_size=None, rewrite=True):
         """将数据集处理为统一格式，改写内容，保存dataset
         keys: 'question', 'image_paths', 'content', 'index', 'chunk_id', 'dataset_id', 'answer', 'answer_label', 'key_words', 'source'
         """
         # Load from Hugging Face
-        dataset = load_dataset("mint-medmax/medmax_data", split="test") 
+        dataset = load_dataset(dataset_name, split="train") 
         
         # Filter by credential if needed - usually we want 'no' for public processing
         # dataset = dataset.filter(lambda x: x['credential'] == 'no')
@@ -46,9 +47,9 @@ class MedMaxDataset(Dataset):
         if dataset_size is not None:
             dataset = dataset.select(range(min(dataset_size, len(dataset))))
         
-        workspace_folder = self.dataset_path
+        workspace_folder = output_path
         os.makedirs(os.path.join(workspace_folder, "images"), exist_ok=True)
-        client = self.vlm_service
+        client = vlm_service
         sem = asyncio.Semaphore(64)
 
         async def process_example(idx, ex):
@@ -124,11 +125,11 @@ class MedMaxDataset(Dataset):
                     "content": content,
                     "index": idx,
                     "chunk_id": chunk_id,
-                    "dataset_id": self.dataset_name,
+                    "dataset_id": dataset_name,
                     "answer": answer,
                     "answer_label": answer_label,
                     "key_words": [],
-                    "source": ex.get('source', self.dataset_name),
+                    "source": ex.get('source', dataset_name),
                     "task": ex.get('task', ''),
                     "credential": ex.get('credential', 'no')
                 }
@@ -146,7 +147,6 @@ class MedMaxDataset(Dataset):
         logger.info(f"processed dataset {self.dataset_name} with {len(dataset)} examples.")
         dataset.save_to_disk(self.dataset_path)
         logger.info(f"saved processed dataset to {self.dataset_path}.")
-        self.dataset = dataset
     
     def __len__(self):
         return len(self.dataset)
@@ -154,14 +154,14 @@ class MedMaxDataset(Dataset):
     def __getitem__(self, index: int):
         return self.dataset[index]
 
-    def evaluate(self, index, conversation):
+    def evaluate(self, item, conversation):
         assistant_message = conversation['messages'][-1]
         last_text_part = assistant_message['content'][-1]['text'] 
         pred_answer = extract_catogorical_answer(last_text_part)
-        gold_answer = self.dataset[index]['answer_label']
+        gold_answer = item['answer_label']
         return int(pred_answer == gold_answer)
 
 if __name__ == "__main__":
     openai_service = OpenAIVLMService(model_name="Qwen3-VL-4B-Instruct", api_key="EMPTY", url="http://localhost:8000/v1")
-    dataset = MedMaxDataset("medmax", openai_service, 10)
-    dataset.process_dataset()
+    output_path = "datasets/preprocessed_datasets/medmax"
+    MedMaxDataset.process_dataset("mint-medmax/medmax_data", output_path, openai_service)
