@@ -17,7 +17,7 @@ from typing import List, Dict, Any
 import sys
 
 if __name__ == "__main__":
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 from data.common import REWRITE_CONTENT_QUESTION_PROMPT
 from MMRAG.model_service.vlm_service import OpenAIVLMService
@@ -40,7 +40,7 @@ class MedMaxDataset(Dataset):
         keys: 'question', 'image_paths', 'content', 'index', 'chunk_id', 'dataset_id', 'answer', 'answer_label', 'key_words', 'source'
         """
         # Load from Hugging Face
-        dataset = load_dataset(dataset_name, split="train") 
+        dataset = load_dataset(dataset_name, split=f"train[:{dataset_size}]")
         
         # Filter by credential if needed - usually we want 'no' for public processing
         # dataset = dataset.filter(lambda x: x['credential'] == 'no')
@@ -80,7 +80,7 @@ class MedMaxDataset(Dataset):
                             image_path = os.path.join(root_path, img_p)
                             if os.path.exists(image_path):
                                 image_paths.append(image_path)
-                    if image_paths is None:
+                    if len(image_paths) == 0:
                         return None
 
                     # 2. Handle text (Instruction, context, and expected response)
@@ -91,7 +91,7 @@ class MedMaxDataset(Dataset):
                     # 3. Rewrite content or use answer
                     if rewrite:
                         image_content = encode_image_paths_to_base64(image_paths)
-                        prompt_text = REWRITE_CONTENT_QUESTION_PROMPT.format(question=question)
+                        prompt_text = REWRITE_CONTENT_QUESTION_PROMPT.format(content=question)
                         messages = image_content + [{"type": "text", "text": prompt_text}]
                         response = await client.async_generate_batch([messages], temperature=0.7)
                         content = response[0].strip()
@@ -153,4 +153,4 @@ class MedMaxDataset(Dataset):
 if __name__ == "__main__":
     openai_service = OpenAIVLMService(model_name="Qwen3-VL-4B-Instruct", api_key="EMPTY", url="http://localhost:8000/v1")
     output_path = "datasets/preprocessed_datasets/medmax"
-    MedMaxDataset.process_dataset("mint-medmax/medmax_data", output_path, openai_service, "datasets/medmax")
+    MedMaxDataset.process_dataset("datasets/medmax", output_path, openai_service, "datasets/medmax", dataset_size=100)
