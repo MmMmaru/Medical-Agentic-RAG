@@ -118,8 +118,20 @@ class MedMaxDataset(Dataset):
                             "credential": ex.get('credential', 'no')
                         }
                     else:
-                        content = answer if answer else question
-                    
+                        new_example = {
+                            "question": ex['text'],
+                            "image_paths": image_paths,
+                            "content": ex['text'],
+                            "index": idx,
+                            "chunk_id": chunk_id,
+                            "dataset_id": dataset_name,
+                            "answer": ex['text'],
+                            "answer_label": ex['text'],
+                            "key_words": [],
+                            "source": ex.get('source', dataset_name),
+                            "task": ex.get('task', ''),
+                            "credential": ex.get('credential', 'no')
+                        }
                 else:
                     new_example = None
                 return new_example

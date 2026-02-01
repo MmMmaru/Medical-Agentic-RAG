@@ -31,10 +31,17 @@
 # echo "第二个文件下载并解压完成！"
 
 # 创建目录
-mkdir -p ./datasets/medmax
+# mkdir -p ./datasets/medmax
+
+# # 下载整个数据集
+# huggingface-cli download \
+#   --repo-type dataset \
+#   mint-medmax/medmax_data \
+#   --local-dir ./datasets/medmax
+mkdir -p ./datasets/pmc-oa
 
 # 下载整个数据集
-huggingface-cli download \
+hf download \
   --repo-type dataset \
-  mint-medmax/medmax_data \
-  --local-dir ./datasets/medmax
+  axiong/pmc_oa \
+  --local-dir ./datasets/pmc-oa

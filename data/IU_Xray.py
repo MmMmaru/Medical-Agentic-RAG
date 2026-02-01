@@ -1,3 +1,8 @@
+# iu_xary
+
+# sample
+# {"id": "CXR2384_IM-0942", "report": "The heart size and pulmonary vascularity appear within normal limits. A large hiatal hernia is noted. The lungs are free of focal airspace disease. No pneumothorax or pleural effusion is seen. Degenerative changes are present in the spine.", "image_path": ["CXR2384_IM-0942/0.png", "CXR2384_IM-0942/1.png"], "split": "train"}, {"id": "CXR2926_IM-1328", "report": "Cardiac and mediastinal contours are within normal limits. The lungs are clear. Bony structures are intact.", "image_path": ["CXR2926_IM-1328/0.png", "CXR2926_IM-1328/1.png"], "split": "train"}, {"id": "CXR1451_IM-0291", "report": "Left lower lobe calcified granuloma. Heart size normal. No pleural effusion or pneumothorax. Mild medial right atelectasis. Mild emphysema.", "image_path": ["CXR1451_IM-0291/0.png", "CXR1451_IM-0291/1.png"], "split": "train"}
+
 from datasets import load_dataset, load_from_disk
 import os
 from torch.utils.data import Dataset
@@ -6,82 +11,60 @@ from typing import List, Dict, Any
 import sys
 
 if __name__ == "__main__":
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model_service.vlm_service import OpenAIVLMService
-from utils import compute_mdhash_id, extract_catogorical_answer, logger, encode_image_paths_to_base64
+    sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-class IUXrayDataset(Dataset):
-    def __init__(self, dataset_name, vlm_service, dataset_size=None):
+from data.common import REWRITE_CONTENT_QUESTION_PROMPT
+from MMRAG.model_service.vlm_service import OpenAIVLMService
+from MMRAG.utils import compute_mdhash_id, extract_catogorical_answer, logger, encode_image_paths_to_base64
+
+class MedMaxDataset(Dataset):
+    def __init__(self, dataset_name, dataset_size=None):
         super().__init__()
-        self.vlm_service = vlm_service
         self.dataset_name = dataset_name
         self.dataset_path = f"./datasets/processed_datasets/{self.dataset_name}"
         if os.path.exists(self.dataset_path):
             logger.info(f"Loading processed dataset from {self.dataset_path}.")
             self.dataset = load_from_disk(self.dataset_path)
         else:
-            self.dataset = self.process_dataset(dataset_size=dataset_size)
+            self.dataset = None
     
-    def process_dataset(self, dataset_size=None, rewrite=True):
+    @staticmethod
+    def process_dataset(dataset_name, output_path, vlm_service, root_path, dataset_size=None, rewrite=True):
         """将数据集处理为统一格式，改写内容，保存dataset
-        对VQA数据集增加content，对report类型数据集增加question
-        keys: 'question', 'image_paths', 'content', 'index', 'chunk_id', 'dataset_id', 'answer', 'answer_labal', 'key_words', 'source'
+        keys: 'question', 'image_paths', 'content', 'index', 'chunk_id', 'dataset_id', 'answer', 'answer_label', 'key_words', 'source'
         """
-        dataset = load_dataset(self.dataset_name, split="test") # load from network
+        # Load from Hugging Face
+        dataset = load_dataset(dataset_name, split=f"train[:{dataset_size}]")
+        
+        # Filter by credential if needed - usually we want 'no' for public processing
+        # dataset = dataset.filter(lambda x: x['credential'] == 'no')
+        
         if dataset_size is not None:
             dataset = dataset.select(range(min(dataset_size, len(dataset))))
-        workspace_folder = self.dataset_path
+        
+        workspace_folder = output_path
         os.makedirs(os.path.join(workspace_folder, "images"), exist_ok=True)
-        client = self.vlm_service
-        sem = asyncio.Semaphore(64)  # 限制并发数量，防止过多请求导致问题
+        client = vlm_service
+        sem = asyncio.Semaphore(64)
+
         async def process_example(idx, ex):
-            # 处理单个样本
             async with sem:
                 image_paths = []
-                chunk_id = compute_mdhash_id(content, "chunk_")
-                for i, image in enumerate(ex['images']):
-                    image_path = os.path.join(workspace_folder, "images", f"pmcvqa_{idx}_img{i}.jpeg")
-                    image.save(image_path)
-                    image_paths.append(image_path)
-                
-                if rewrite:
-                    from task.common import REWRITE_CONTENT_PROMPT
-                    image_content = encode_image_paths_to_base64(image_paths)
-                    prompt_text = REWRITE_CONTENT_PROMPT.format(question=ex["question"])
-                    messages = image_content + [{"type": "text", "text": prompt_text}]
-                    response = await client.async_generate_batch([messages], temperature=0.7)
-                    content = response[0].strip()
-                else:
-                    content = ex['answer'].strip()
-                    
-                new_example = {
-                    "question": ex['question'],
-                    "image_paths": image_paths,
-                    "content": content,
-                    "index": idx,
-                    "chunk_id": chunk_id,
-                    "dataset_id": self.dataset_name,
-                    "answer": ex['answer'],
-                    "answer_label": ex['answer_label'],
-                    "key_words": [],
-                    "source": self.dataset_name
-                }
-                return new_example
+                for img_path in ex['image_path']:
+                    image_paths.append(os.path.join(root_path, ))
             
         async def run_all():
             return await asyncio.gather(
                 *[process_example(idx, ex) for idx, ex in enumerate(dataset)]
             )
         
-        results = asyncio.run(
-            run_all()
-        )
+        results = asyncio.run(run_all())
         
-        from datasets import Dataset
-        dataset = Dataset.from_list(results)
-        logger.info(f"processed dataset{self.dataset_name} with {len(dataset)} examples.")
-        dataset.save_to_disk(self.dataset_path)
-        logger.info(f"saved processed dataset to {self.dataset_path}.")
+        from datasets import Dataset as HFDataset
+        dataset = HFDataset.from_list(results)
+        logger.info(f"processed dataset {dataset_name} with {len(dataset)} examples.")
+        dataset.save_to_disk(output_path)
+        logger.info(f"saved processed dataset to {output_path}.")
     
     def __len__(self):
         return len(self.dataset)
@@ -89,14 +72,14 @@ class IUXrayDataset(Dataset):
     def __getitem__(self, index: int):
         return self.dataset[index]
 
-    def evaluate(self, index, conversation):
+    def evaluate(self, item, conversation):
         assistant_message = conversation['messages'][-1]
-        last_text_part = assistant_message['content'][-1]['text'] # this contains the final answer in GSM8K
+        last_text_part = assistant_message['content'][-1]['text'] 
         pred_answer = extract_catogorical_answer(last_text_part)
-        gold_answer = self.dataset[index]['answer_labal']
+        gold_answer = item['answer_label']
         return int(pred_answer == gold_answer)
 
 if __name__ == "__main__":
     openai_service = OpenAIVLMService(model_name="Qwen3-VL-4B-Instruct", api_key="EMPTY", url="http://localhost:8000/v1")
-    dataset = IUXrayDataset("UCSC-VLAA/MedVLThinker-Eval", openai_service, 10)
-    dataset.process_dataset()
+    output_path = "datasets/preprocessed_datasets/medmax"
+    MedMaxDataset.process_dataset("datasets/medmax", output_path, openai_service, "datasets/medmax", dataset_size=100)
