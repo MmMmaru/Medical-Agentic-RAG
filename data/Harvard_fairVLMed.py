@@ -74,7 +74,7 @@ class HarvardFairVLMedDataset(Dataset):
                     return None
 
                 # 2. Handle text - 基于report构建question，使用report或gpt4_summary作为answer
-                report = ex.get('report', '').strip()
+                report = ex.get('gpt4_summary', '').strip()
                 gpt4_summary = ex.get('gpt4_summary', '').strip()
 
                 # 构建问题：基于report创建医疗分析问题
@@ -85,11 +85,11 @@ class HarvardFairVLMedDataset(Dataset):
 
                 # 使用report或gpt4_summary作为answer
                 answer = gpt4_summary if gpt4_summary else report
-
+                from data.common import REWRITE_QUESTION_PROMPT
                 # 3. Rewrite content or use original
                 if rewrite:
                     image_content = encode_image_paths_to_base64(image_paths)
-                    prompt_text = REWRITE_CONTENT_QUESTION_PROMPT.format(content=report)
+                    prompt_text = REWRITE_QUESTION_PROMPT.format(content=report)
                     messages = image_content + [{"type": "text", "text": prompt_text}]
                     response = await client.async_generate_batch([messages], temperature=0.7)
                     content = response[0].strip()

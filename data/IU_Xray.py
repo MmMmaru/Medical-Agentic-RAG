@@ -35,7 +35,7 @@ class IUXrayDataset(Dataset):
         keys: 'question', 'image_paths', 'content', 'index', 'chunk_id', 'dataset_id', 'answer', 'answer_label', 'key_words', 'source', 'task', 'credential'
         """
         # Load from Hugging Face
-        dataset = load_dataset(dataset_name, split=f"train[:{dataset_size}]")
+        dataset = load_dataset('json', dataset_name, split=f"train[:{dataset_size}]")
 
         if dataset_size is not None:
             dataset = dataset.select(range(min(dataset_size, len(dataset))))
@@ -45,7 +45,7 @@ class IUXrayDataset(Dataset):
         client = vlm_service
         sem = asyncio.Semaphore(64)
 
-        async def process_example(idx, ex):
+        async def process_example(idx, ex): 
             async with sem:
                 # 1. Handle image_path - IU X-ray specific format
                 image_paths = []
@@ -72,8 +72,9 @@ class IUXrayDataset(Dataset):
 
                 # 3. Rewrite content using VLM service
                 if rewrite:
+                    from data.common import REWRITE_QUESTION_PROMPT
                     image_content = encode_image_paths_to_base64(image_paths)
-                    prompt_text = REWRITE_CONTENT_QUESTION_PROMPT.format(content=question + "\n\nReport: " + report)
+                    prompt_text = REWRITE_QUESTION_PROMPT.format(content=report)
                     messages = image_content + [{"type": "text", "text": prompt_text}]
                     response = await client.async_generate_batch([messages], temperature=0.7)
                     response_text = response[0].strip()

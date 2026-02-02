@@ -1,4 +1,4 @@
-REWRITE_QUERY_PROMPT = """
+REWRITE_QUESTION_PROMPT = """
 You are a professional medical assistant. Your task is to create one high quality query of the given image and content. 
 Given the following image and content, generate a concise and clear medical query that effectively captures the essential information.
 You may choose one of the following tasks to create the query:
