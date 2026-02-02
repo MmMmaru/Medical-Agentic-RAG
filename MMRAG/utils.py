@@ -57,7 +57,7 @@ def extract_catogorical_answer(text: str) -> str:
     return final_answer.group(1) if final_answer else ""
 
 
-def encode_image_paths_to_base64(image_paths, content_format = "image_url"):
+def encode_image_paths_to_base64(image_paths: list[str], content_format = "image_url"):
 	"encode image paths to base64 strings"
 	import base64
 	import requests
