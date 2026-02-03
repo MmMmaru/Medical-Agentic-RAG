@@ -24,6 +24,7 @@ def load_lora_model(model_name, peft_config=None):
     processor = Qwen3VLEmbeddingProcessor(model_name)
     if peft_config is not None:
         model = get_peft_model(model, peft_config)
+    print()
     return model, processor
 
 class ContrastiveLoss(nn.Module):
@@ -151,23 +152,9 @@ def main():
     # For Qwen2VL, the layer class is usually Qwen2VLDecoderLayer
     from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLDecoderLayer
     
-    auto_wrap_policy = functools.partial(
-        transformer_auto_wrap_policy,
-        transformer_layer_cls={Qwen2VLDecoderLayer},
-    )
-
-    model = FSDP(
-        model,
-        auto_wrap_policy=auto_wrap_policy,
-        mixed_precision=MixedPrecision(
-            param_dtype=torch.bfloat16,
-            reduce_dtype=torch.bfloat16,
-            buffer_dtype=torch.bfloat16,
-        ),
-        device_id=torch.cuda.current_device(),
-        sharding_strategy=ShardingStrategy.FULL_SHARD, 
-        limit_all_gathers=True,
-    )
+    model.to(device)
+    model = torch.compile(model)
+    model = DistributedDataParallel(model, device_ids=[local_rank])
 
     optimizer = optim.AdamW(model.parameters(), lr=2e-5, weight_decay=0.01)
     criterion = ContrastiveLoss().to(device)
@@ -208,11 +195,25 @@ def main():
     # Save
     if rank == 0:
         print("Saving model...")
-        save_policy = StateDictType.FULL_STATE_DICT
-        with FSDP.state_dict_type(model, save_policy):
-            cpu_state = model.state_dict()
+        output_dir = "./checkpoint"
+        model.save_pretrained(output_dir)
+        # torch.save(model.module.state_dict(), "checkpoint/checkpoint.pt")
         # Save cpu_state...
         
+        # 模型加载流程
+        # from transformers import AutoModelForCausalLM, AutoTokenizer
+        # from peft import PeftModel
+
+        # # 1. 加载原始基座模型
+        # base_model_path = "path/to/base_model" # 例如 meta-llama/Llama-2-7b-hf
+        # model = AutoModelForCausalLM.from_pretrained(base_model_path)
+        # tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+
+        # # 2. 加载你保存的 LoRA 权重
+        # lora_weights_path = "./my_lora_weights"
+        # model = PeftModel.from_pretrained(model, lora_weights_path)
+
+        # 现在可以使用 model 进行推理了
     cleanup()
 
 if __name__ == "__main__":

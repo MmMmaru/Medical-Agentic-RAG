@@ -3,8 +3,8 @@ import os
 import shutil
 import json
 from typing import List, Dict, Any, Optional
-from utils import logger
-from base import DataChunk, dict_to_datachunk, BaseVectorStorage
+from ..utils import logger
+from ..base import DataChunk, dict_to_datachunk, BaseVectorStorage
 
 try:
     from pymilvus import MilvusClient, DataType
@@ -181,4 +181,3 @@ class MilvusVectorStorage(BaseVectorStorage):
             logger.info(f"Restored from backup: {backup_name}")
         else:
             logger.error(f"Backup not found: {backup_path}")
-

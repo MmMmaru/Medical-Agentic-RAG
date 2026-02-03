@@ -2,22 +2,19 @@ from typing import Any, Dict, List
 import os
 import json
 from datasets import load_dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset, Subset
 import asyncio
-
+import shutil
 import sys
-# 确保项目根目录在 path 中
-# project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# print(project_root, os.getcwd())
-# if project_root not in sys.path:
-#     sys.path.insert(0, project_root)
+if __name__ == "__main__":
+    sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-from data.medmax import MedMaxDataset
-from model_service.embedding_service import EmbeddingService, OpenaiEmbeddingService
-from model_service.vlm_service import VLMService
-from DB.milvus_vectorDB import MilvusVectorStorage
-from utils import logger, compute_mdhash_id
-from base import DataChunk, dict_to_datachunk
+from data.pmc_oa import PMCOADataset
+from MMRAG.model_service.embedding_service import EmbeddingService, OpenaiEmbeddingService
+from MMRAG.model_service.vlm_service import VLMService
+from MMRAG.DB.milvus_vectorDB import MilvusVectorStorage
+from MMRAG.utils import logger, compute_mdhash_id
+from MMRAG.base import DataChunk, dict_to_datachunk
 
 class MMRAG:
     """
@@ -28,14 +25,14 @@ class MMRAG:
     """
     def __init__(
         self,
-        embedding_service: EmbeddingService,
+        embedding_service: OpenaiEmbeddingService,
         llm_service: VLMService,
         workspace: str = "./workspace",
     ):
         self.workspace = workspace
         self.embedding_service = embedding_service
         self.llm_service = llm_service
-        self.insert_batch_size = 128
+        self.insert_batch_size = 256
         
         # 初始化持久化组件
         self.vector_storage = MilvusVectorStorage(
@@ -64,19 +61,17 @@ class MMRAG:
         """
         pass
 
-    async def ainit_rag(self):
-        dir_list = [
-            "datasets/preprocessed_dataset/medmax",
-        ]
-        for dir_name in dir_list:
-            await self.ingest_dataset(dir_name, dataset_size=100)
+    async def ainit_rag(self, dataset_list: list[Dataset]):
+        for dataset in dataset_list:
+            await self.ingest_dataset(dataset)
     
-    async def ingest_dataset(self, dataset_name: str, dataset_size: int = None, filter: str = None) -> None:
+    async def ingest_dataset(self, dataset: Dataset, dataset_size: int = None, filter: str = None) -> None:
         """文档入库（带持久化）"""
         # 1. 生成文档ID
-        dataset = load_dataset(dataset_name)
+        dataset_name = dataset.dataset_name
         if dataset_size:
-            dataset = dataset['train'].select(range(dataset_size))
+            # dataset = dataset[:dataset_size]
+            dataset = Subset(dataset, range(dataset_size))
         # 2. 处理文档
         # dataset = self._process_dataset(dataset, dataset_size)
         doc_id = compute_mdhash_id(dataset_name, prefix="doc_")
@@ -102,6 +97,7 @@ class MMRAG:
 
         for i in range(0, len(dataset), self.insert_batch_size):
             # 下面这一行直接把 slice 转成了 List[Dict] 对象
+            # batch = dataset[i:i+self.insert_batch_size]
             batch = [dataset[j] for j in range(i, min(i + self.insert_batch_size, len(dataset)))]
             await process_chunk(batch)
         
@@ -146,7 +142,12 @@ class MMRAG:
         logger.info("Deleted RAG workspace")
 
 async def main():
-    
+    # # first init
+    # workspace = "workspace"
+    # if os.path.exists(workspace):
+    #     shutil.rmtree(workspace)
+    # os.makedirs(workspace)
+
     embedding_service = OpenaiEmbeddingService()
     llm_service = VLMService()
     RAG = MMRAG(
@@ -154,31 +155,42 @@ async def main():
         llm_service=llm_service,
         workspace="./workspace",
     )
-    # await RAG.ainit_rag()
+    # dataset_list = [
+    #     PMCOADataset("pmc-oa")
+    # ]
+    # await RAG.ainit_rag(dataset_list)
     print(RAG.vector_storage.client.get_collection_stats(RAG.vector_storage.collection_name)['row_count'])
     query = [{"text": "ICA-derived 3D model"}]
     results = await RAG.retrieve(query, top_k=5)
     for r in results:
-        print(f'score: {r.metadata.get("score")}: {r.content}...')
+        print(f'score: {r.metadata.get("score")}: {r.content}')
     
     # test recall@5 and MRR on 200
-    dataset_size = 200
-    dataset = MedMaxDataset("datasets/preprocessed_datasets/medmax", dataset_size)
-    recall_5_score = 0
+    dataset_size = 400
+    dataset = PMCOADataset("pmc-oa", dataset_size)
+    recall_1_score, recall_5_score, recall_10_score = 0,0,0
     MRR_score = 0
     for i in range(len(dataset)):
         item = dataset[i]
         query = item['question']
-        results = await RAG.retrieve(query, top_k=5)
-        recall_score = 0
+        query = [{'text': query}]
+        results = await RAG.retrieve(query, top_k=10)
         local_mrr_score = 0
         for local_index, r in enumerate(results):
             if r.chunk_id == item['chunk_id']:
-                recall_score = 1
+                if local_index == 0:
+                    recall_1_score += 1
+                if local_index < 5:
+                    recall_5_score += 1
+                if local_index < 10:
+                    recall_10_score += 1
                 local_mrr_score = 1/(local_index+1)
-        recall_5_score += recall_score
         MRR_score += local_mrr_score
-    print(f"recall@5: {recall_5_score / dataset_size}, MRR: {MRR_score / dataset_size}")
+    print(f"""
+            recall@1: {recall_1_score / dataset_size}, 
+            recall@5: {recall_5_score / dataset_size},
+            recall@10: {recall_10_score / dataset_size},
+            MRR: {MRR_score / dataset_size}""")
 
 if __name__ == "__main__":
     asyncio.run(main())

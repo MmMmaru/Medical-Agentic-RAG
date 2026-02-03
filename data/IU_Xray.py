@@ -27,18 +27,23 @@ class IUXrayDataset(Dataset):
             logger.info(f"Loading processed dataset from {self.dataset_path}.")
             self.dataset = load_from_disk(self.dataset_path)
         else:
+            logger.error("process dataset first")
             self.dataset = None
 
     @staticmethod
-    def process_dataset(dataset_name, output_path, vlm_service, root_path, dataset_size=None, rewrite=True):
+    def process_dataset(dataset_name, dataset_path, output_path, vlm_service, root_path, dataset_size=None, rewrite=True):
         """将数据集处理为统一格式，改写内容，保存dataset
         keys: 'question', 'image_paths', 'content', 'index', 'chunk_id', 'dataset_id', 'answer', 'answer_label', 'key_words', 'source', 'task', 'credential'
         """
         # Load from Hugging Face
-        dataset = load_dataset('json', dataset_name, split=f"train[:{dataset_size}]")
+        # dataset = load_dataset("json", data_files=dataset_path, split="train")
+        import json
+        with open(dataset_path, "r") as f:
+            dataset = json.load(f)
+        dataset = dataset['train']
 
         if dataset_size is not None:
-            dataset = dataset.select(range(min(dataset_size, len(dataset))))
+            dataset = dataset[:dataset_size]
 
         workspace_folder = output_path
         os.makedirs(os.path.join(workspace_folder, "images"), exist_ok=True)
@@ -171,5 +176,6 @@ class IUXrayDataset(Dataset):
 if __name__ == "__main__":
     openai_service = OpenAIVLMService(model_name="Qwen3-VL-4B-Instruct", api_key="EMPTY", url="http://localhost:8000/v1")
     output_path = "datasets/preprocessed_datasets/iu_xray"
+    dataset_path = "datasets/iu_xray/iu_xray/annotation.json"
     # IU X-ray dataset from HuggingFace: jainr3/iu_xray or similar
-    IUXrayDataset.process_dataset("jainr3/iu_xray", output_path, openai_service, "datasets/iu_xray", dataset_size=100)
+    IUXrayDataset.process_dataset("iu_xray", dataset_path, output_path, openai_service, "datasets/iu_xray/iu_xray/images", dataset_size=100)

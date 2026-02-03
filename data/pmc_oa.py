@@ -8,7 +8,7 @@
 
 from datasets import load_dataset, load_from_disk
 import os
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 import asyncio
 from typing import List, Dict, Any
 import sys
@@ -26,28 +26,41 @@ class PMCOADataset(Dataset):
     def __init__(self, dataset_name, dataset_size=None):
         super().__init__()
         self.dataset_name = dataset_name
-        self.dataset_path = f"./datasets/processed_datasets/{self.dataset_name}"
+        self.dataset_path = f"./datasets/preprocessed_datasets/{self.dataset_name}"
         if os.path.exists(self.dataset_path):
             logger.info(f"Loading processed dataset from {self.dataset_path}.")
             self.dataset = load_from_disk(self.dataset_path)
+            if dataset_size:
+                self.dataset = Subset(self.dataset, range(dataset_size))
         else:
             self.dataset = None
+        
 
     @staticmethod
-    def process_dataset(dataset_name, output_path, vlm_service, root_path, dataset_size=None, rewrite=True):
+    def process_dataset(dataset_name, dataset_path, output_path, vlm_service, root_path, dataset_size=None, rewrite=True):
         """将数据集处理为统一格式，改写内容，保存dataset
         keys: 'question', 'image_paths', 'content', 'index', 'chunk_id', 'dataset_id', 'answer', 'answer_label', 'key_words', 'source', 'task', 'credential'
         """
         # Load from Hugging Face
-        dataset = load_dataset('json', dataset_name, split=f"train[:{dataset_size}]")
+        import json
+        dataset = []
+        with open(dataset_path, "r") as f:
+            for i, line in enumerate(f):
+                if i >= dataset_size:
+                    break
+                line = line.strip()
+                if line:
+                    dataset.append(json.loads(line))
 
+        # dataset = load_dataset('json', dataset_path, split=f"train")
         if dataset_size is not None:
-            dataset = dataset.select(range(min(dataset_size, len(dataset))))
-
+            # dataset = dataset.take(dataset_size)
+            # dataset = dataset.select(range(min(dataset_size, len(dataset))))
+            dataset = dataset[:dataset_size]
         workspace_folder = output_path
         os.makedirs(os.path.join(workspace_folder, "images"), exist_ok=True)
         client = vlm_service
-        sem = asyncio.Semaphore(64)
+        sem = asyncio.Semaphore(256)
 
         async def process_example(idx, ex):
             async with sem:
@@ -183,6 +196,9 @@ class PMCOADataset(Dataset):
 
 
 if __name__ == "__main__":
+    output_path = "datasets/preprocessed_datasets/pmc-oa"
     openai_service = OpenAIVLMService(model_name="Qwen3-VL-4B-Instruct", api_key="EMPTY", url="http://localhost:8000/v1")
-    output_path = "datasets/preprocessed_datasets/pmcoa"
-    PMCOADataset.process_dataset("datasets/pmcoa", output_path, openai_service, "datasets/pmcoa", dataset_size=100)
+    PMCOADataset.process_dataset("pmc-oa", "datasets/pmc-oa/pmc_oa.jsonl", output_path, openai_service, "datasets/pmc-oa/images", dataset_size=10000)
+    dataset = PMCOADataset("pmc-oa")
+    print(len(dataset))
+    print(dataset[0])
