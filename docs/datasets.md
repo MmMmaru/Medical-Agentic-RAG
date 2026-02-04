@@ -87,14 +87,14 @@ dataset.process_dataset(dataset_size=100, rewrite=True)
 # 统一数据格式
 {
     "question": str,          # 问题文本
-    "image_paths": List[str], # 图像路径列表
+    "image_paths": list[str], # 图像路径列表
     "content": str,           # 改写后的内容
     "index": int,             # 样本索引
     "chunk_id": str,          # 唯一标识
     "dataset_id": str,        # 数据集名称
     "answer": str,            # 原始答案
     "answer_label": str,      # 提取的选项标签
-    "key_words": List[str],   # 关键词
+    "key_words": list[str],   # 关键词
     "source": str             # 数据来源
 }
 ```

@@ -10,8 +10,11 @@ import functools
 import argparse
 from peft import LoraConfig, PeftModel, get_peft_model
 from datasets import load_from_disk
-from ...data.medmax import MedMaxDataset
 from qwen3_vl_embedding import Qwen3VLForEmbedding, Qwen3VLEmbeddingProcessor
+
+if __name__ == "__main__":
+    sys.path[0] = os.getcwd()
+from data.pmc_oa import PMCOADataset
 
 # from MMRAG.utils import logger # Avoid import issues if not set up
 
@@ -59,19 +62,6 @@ class ContrastiveLoss(nn.Module):
             
         return infoNCE_loss
 
-class MixedModalDataset(Dataset):
-    def __init__(self, data_path, processor):
-        self.processor = processor
-        self.dataset = load_from_disk(data_path) # 
-        self.system_prompt = "You are an helpful assistant"
-
-    def __len__(self):
-        return len(self.dataset)
-    
-    def __getitem__(self, idx):
-        item = self.dataset[idx]
-        return item # Dict[str, str]
-
 def collate_fn(batch, processor):
     
     doc_items = [{
@@ -94,12 +84,11 @@ def main():
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', required=True, default="Qwen/Qwen3-VL-Embedding-2B", help="path or name to model")
-    parser.add_argument('--train_data', required=True, type=str, help="path to tokenized train data")
-    parser.add_argument('--val_data', default="", type=str, help="path to tokenized val data")
+    parser.add_argument('--train_data', required=True, type=str, help="path to train data")
+    parser.add_argument('--val_data', default="", type=str, help="path to val data")
 
-    parser.add_argument('--ckpt', required=True, type=str, help="finetuning checkpoint")
-    parser.add_argument('--ds', required=True, type=str, help="deepspeed config")
-    parser.add_argument('--output_dir', required=True, type=str, help="output directory")
+    # parser.add_argument('--ds', required=True, type=str, help="deepspeed config")
+    parser.add_argument('--output_dir', default="./checkpoint", type=str, help="output directory")
 
     parser.add_argument('--resume', default=False, action='store_true', help='resume from the last checkpoint')         
 
@@ -112,9 +101,8 @@ def main():
     parser.add_argument('--epoch', type=int, default=1, help="num of epochs")         
     parser.add_argument('--grad_acc', type=int, default=1, help="gradient accumulation steps")         
     parser.add_argument('--steps', type=int, default=-1, help="num of training steps")         
-    parser.add_argument('--bs', type=int, default=1, help="per device batch size")         
-    parser.add_argument('--save_strategy', default="no", type=str, choices=["no", "epoch", "steps"], help="save strategy")
-    parser.add_argument('--save_steps', type=float, default=0.1, help="save checkpoints every save_steps of the training run")         
+    parser.add_argument('--bs', type=int, default=1, help="per device batch size")
+    parser.add_argument('--save_steps', type=float, default=100, help="save checkpoints every save_steps of the training run")         
     parser.add_argument('--logging_steps', type=float, default=0.001, help="logging at every logging_steps of the total training steps")         
     parser.add_argument('--eval_steps', type=float, default=0.1, help="evaluate at every evaluation steps of the total training steps")         
     parser.add_argument('--warmup_ratio', type=float, default=0.0, help="warmup ratio")         
@@ -147,20 +135,15 @@ def main():
     # 1. Model & Processor
     model, processor = load_lora_model(args.model_name, peft_config)
 
-    # 2. FSDP Wrap
-    # Identify transformer layers for auto wrap
-    # For Qwen2VL, the layer class is usually Qwen2VLDecoderLayer
-    from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLDecoderLayer
-    
     model.to(device)
-    model = torch.compile(model)
+    # model = torch.compile(model)
     model = DistributedDataParallel(model, device_ids=[local_rank])
 
-    optimizer = optim.AdamW(model.parameters(), lr=2e-5, weight_decay=0.01)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     criterion = ContrastiveLoss().to(device)
     
     # 3. Data
-    dataset = MixedModalDataset(args.train_data, processor)
+    dataset = PMCOADataset(args.train_data, processor)
     sampler = DistributedSampler(dataset, rank=rank)
     dataloader = DataLoader(
         dataset, 
@@ -184,13 +167,19 @@ def main():
             query_embed = model(**query_inputs)
             doc_embed = model(**doc_inputs)
             
-            loss = criterion(query_embed, doc_embed)
-            
+            loss = criterion(query_embed, doc_embed) / args.grad_acc
             loss.backward()
-            optimizer.step()
             
+            if (step+1) % args.grad_acc == 0:
+                optimizer.step()
+                optimizer.zero_grad()
             if rank == 0 and step % 10 == 0:
                 print(f"Epoch {epoch}, Step {step}, Loss: {loss.item():.4f}")
+            if rank == 0 and (step+1) % args.save_steps == 0:
+                model.save_pretrained(output_dir)
+        if (step+1) % args.grad_acc != 0:
+            optimizer.step()
+            optimizer.zero_grad()
 
     # Save
     if rank == 0:

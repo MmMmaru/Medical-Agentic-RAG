@@ -6,7 +6,7 @@ import logging
 
 from PIL import Image
 from dataclasses import dataclass
-from typing import Optional, List, Union, Dict, Any
+from typing import Optional, list, Union, dict, Any
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLPreTrainedModel, Qwen3VLModel, Qwen3VLConfig
 from transformers.models.qwen3_vl.processing_qwen3_vl import Qwen3VLProcessor
 from transformers.modeling_outputs import ModelOutput
@@ -125,7 +125,7 @@ class Qwen3VLForEmbedding(Qwen3VLPreTrainedModel):
             embeddings = F.normalize(embeddings, p=2, dim=-1)
         return embeddings
 
-def sample_frames(frames: List[Union[str, Image.Image]], num_segments: int, max_segments: int) -> List[str]:
+def sample_frames(frames: list[Union[str, Image.Image]], num_segments: int, max_segments: int) -> list[str]:
     duration = len(frames)
     frame_id_array = np.linspace(0, duration - 1, num_segments, dtype=int)
     frame_id_list = frame_id_array.tolist()
@@ -179,7 +179,7 @@ class Qwen3VLEmbedder():
         self.model.eval()
 
     @torch.no_grad()
-    def forward(self, inputs: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+    def forward(self, inputs: dict[str, Any]) -> dict[str, torch.Tensor]:
         outputs = self.model(**inputs)
         return {
             'last_hidden_state': outputs.last_hidden_state,
@@ -187,7 +187,7 @@ class Qwen3VLEmbedder():
         }
 
     # Truncate token sequence to a specified max length
-    def _truncate_tokens(self, token_ids: List[int], max_length: int) -> List[int]:
+    def _truncate_tokens(self, token_ids: list[int], max_length: int) -> list[int]:
         if len(token_ids) <= max_length:
             return token_ids
 
@@ -210,11 +210,11 @@ class Qwen3VLEmbedder():
     def format_model_input(
         self, text: Optional[str] = None,
         image: Optional[Union[str, Image.Image]] = None,
-        video: Optional[Union[str, List[Union[str, Image.Image]]]] = None,
+        video: Optional[Union[str, list[Union[str, Image.Image]]]] = None,
         instruction: Optional[str] = None,
         fps: Optional[float] = None,
         max_frames: Optional[int] = None
-    ) -> List[Dict]:
+    ) -> list[dict]:
 
         # Ensure instruction ends with punctuation
         if instruction:
@@ -281,7 +281,7 @@ class Qwen3VLEmbedder():
         return conversation
 
     # Preprocess input conversations for model consumption
-    def _preprocess_inputs(self, conversations: List[List[Dict]]) -> Dict[str, torch.Tensor]:
+    def _preprocess_inputs(self, conversations: list[list[dict]]) -> dict[str, torch.Tensor]:
         text = self.processor.apply_chat_template(
             conversations, add_generation_prompt=True, tokenize=False
         )
@@ -325,7 +325,7 @@ class Qwen3VLEmbedder():
         return hidden_state[row, col]
 
     # Process inputs to generate normalized embeddings
-    def process(self, inputs: List[Dict[str, Any]], normalize: bool = True) -> tuple:
+    def process(self, inputs: list[dict[str, Any]], normalize: bool = True) -> tuple:
         conversations = [self.format_model_input(
             text=ele.get('text'),
             image=ele.get('image'),
@@ -376,7 +376,7 @@ class Qwen3VLEmbeddingProcessor():
         )
 
     # Truncate token sequence to a specified max length
-    def _truncate_tokens(self, token_ids: List[int], max_length: int) -> List[int]:
+    def _truncate_tokens(self, token_ids: list[int], max_length: int) -> list[int]:
         if len(token_ids) <= max_length:
             return token_ids
 
@@ -399,11 +399,11 @@ class Qwen3VLEmbeddingProcessor():
     def format_model_input(
         self, texts: Optional[list[str]] = None,
         images: Optional[list[Union[str, Image.Image]]] = None,
-        video: Optional[Union[str, List[Union[str, Image.Image]]]] = None,
+        video: Optional[Union[str, list[Union[str, Image.Image]]]] = None,
         instruction: Optional[str] = None,
         fps: Optional[float] = None,
         max_frames: Optional[int] = None
-    ) -> List[Dict]:
+    ) -> list[dict]:
 
         # Ensure instruction ends with punctuation
         if instruction:
@@ -472,7 +472,7 @@ class Qwen3VLEmbeddingProcessor():
         return conversation
 
     # Preprocess input conversations for model consumption
-    def _preprocess_inputs(self, conversations: List[List[Dict]]) -> Dict[str, torch.Tensor]:
+    def _preprocess_inputs(self, conversations: list[list[dict]]) -> dict[str, torch.Tensor]:
         text = self.processor.apply_chat_template(
             conversations, add_generation_prompt=True, tokenize=False
         )
@@ -507,10 +507,10 @@ class Qwen3VLEmbeddingProcessor():
         return inputs
 
     # Process inputs to generate normalized embeddings
-    def process(self, inputs: List[Dict[str, List]], normalize: bool = True) -> tuple:
+    def process(self, inputs: list[dict[str, list]], normalize: bool = True) -> tuple:
         conversations = [self.format_model_input(
-            text=ele.get('text'),
-            image=ele.get('image'),
+            texts=[ele.get('text')],
+            images=[ele.get('image')],
             video=ele.get('video'),
             instruction=ele.get('instruction'),
             fps=ele.get('fps'),

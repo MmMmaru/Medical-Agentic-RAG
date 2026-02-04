@@ -58,7 +58,13 @@ def extract_catogorical_answer(text: str) -> str:
 
 
 def encode_image_paths_to_base64(image_paths: list[str], content_format = "image_url"):
-	"encode image paths to base64 strings"
+	"""
+	encode image paths to base64 strings
+	format: [
+			'type': 'image_url', 
+		'image_url': {'url': image_content},
+	]
+	"""
 	import base64
 	import requests
 	import os

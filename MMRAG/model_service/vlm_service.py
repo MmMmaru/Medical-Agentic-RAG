@@ -19,7 +19,7 @@ class OpenAIVLMService(VLMService):
         openai.api_key = api_key
 
     async def async_generate_batch(self, contents: list[list[dict]], temperature: float = 0.7) -> list[str]:
-        
+        "contents: [[{'text': str}, ..]]"
         tasks = [self.client.chat.completions.create(
             model=self.model_name,
             messages=[{"role": "user", "content": content}],

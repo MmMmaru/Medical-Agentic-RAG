@@ -1,5 +1,5 @@
 import numpy as np
-from typing import List, Dict, Any
+from typing import list, dict, Any
 from vllm import LLM, EngineArgs
 from vllm.multimodal.utils import fetch_image
 from dotenv import load_dotenv
@@ -24,10 +24,10 @@ load_dotenv()
 class EmbeddingService:
     embedding_dim: int
 
-    def embed(self, inputs: List[Dict[str, Any]]) -> List[float]:
+    def embed(self, inputs: list[dict[str, Any]]) -> list[float]:
         raise NotImplementedError
 
-    async def async_embed_batch(self, inputs: List[Dict[str, Any]], batch_size: int = 128) -> List[List[float]]:
+    async def async_embed_batch(self, inputs: list[dict[str, Any]], batch_size: int = 128) -> list[list[float]]:
         raise NotImplementedError
 
 @dataclass
@@ -54,29 +54,29 @@ class VllmEmbeddingService(EmbeddingService):
         self.llm = LLM(**vars(engine_args))
         logger.info(f"✅ vLLM model loaded from {self.model_path}")
 
-    def embed(self, inputs: List[Dict[str, Any]]) -> List[np.ndarray]:
+    def embed(self, inputs: list[dict[str, Any]]) -> list[np.ndarray]:
         'e.g. [{"test", "A woman playing with her dog on a beach at sunset."}, {"image": "https://..."}]'
         vllm_inputs = [self._prepare_vllm_inputs(inp) for inp in inputs]
         outputs = self.llm.embed(vllm_inputs)
         embeddings = [output.outputs.embedding for output in outputs]
         return embeddings
     
-    async def async_embed_batch(self, inputs: List[Dict[str, Any]], batch_size: int = 128) -> List[np.ndarray]:
+    async def async_embed_batch(self, inputs: list[dict[str, Any]], batch_size: int = 128) -> list[np.ndarray]:
         all_embeddings = []
         formatted_inputs = [self._prepare_vllm_inputs(inp) for inp in inputs]
         for i in range(0, len(inputs), batch_size):
             batch_inputs = formatted_inputs[i:i+batch_size]
-            outputs = self.llm.embed(batch_inputs) # List[EmbedOutput]
+            outputs = self.llm.embed(batch_inputs) # list[EmbedOutput]
             embeddings = [output.outputs.embedding for output in outputs]
             all_embeddings.extend(embeddings)
         return all_embeddings
     
-    def _format_input_to_conversation(self, input_dict: Dict[str, Any], instruction: str = "Represent the user's input.") -> List[Dict]:
+    def _format_input_to_conversation(self, input_dict: dict[str, Any], instruction: str = "Represent the user's input.") -> list[dict]:
         """
         format input to conversation format
         deal with image path
         Args:
-            input_dict: Dict with 'text' and optional 'image'
+            input_dict: dict with 'text' and optional 'image'
         """
         content = []
         
@@ -113,11 +113,11 @@ class VllmEmbeddingService(EmbeddingService):
         
         return conversation
 
-    def _prepare_vllm_inputs(self, input_dict: Dict[str, Any], instruction: str = "Represent the user's input.") -> Dict[str, Any]:
+    def _prepare_vllm_inputs(self, input_dict: dict[str, Any], instruction: str = "Represent the user's input.") -> dict[str, Any]:
         """
         prepare vllm input format
         Args:
-            input_dict: Dict with 'text' and optional 'image'
+            input_dict: dict with 'text' and optional 'image'
                 e.g. {"text": "A woman shares a joyful moment with her golden retriever on a sun-drenched beach at sunset, as the dog offers its paw in a heartwarming display of companionship and trust.",
                      "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"}
             instruction: Instruction for the model (for qwen3-vl-embedding)
@@ -171,13 +171,14 @@ class OpenaiEmbeddingService(EmbeddingService):
             base_url=self.base_url,
         )
 
-    async def async_embed_batch(self, inputs: List[Dict[str, Any]], batch_size=1) -> List[List[float]]:
+    async def async_embed_batch(self, inputs: list[dict[str, Any]], batch_size=1) -> list[list[float]]:
         """
         Args:
-            inputs: List of Dicts with 'content' and optional 'images'
+            inputs: list of Dicts with 'content' and optional 'images'
+                ["content": str, "image_paths": list]
             batch_size: OpenAI API does not support batch, so this is ignored
         Returns:
-            List of float embeddings
+            list of float embeddings
         """
         all_embeddings = []
         formatted_inputs = [self._format_input_to_conversation(inp) for inp in inputs]
@@ -197,12 +198,12 @@ class OpenaiEmbeddingService(EmbeddingService):
             all_embeddings.append(response.data[0].embedding)
         return all_embeddings
     
-    def _format_input_to_conversation(self, input_dict: Dict[str, Any], instruction: str = "Represent the user's input.") -> List[Dict]:
+    def _format_input_to_conversation(self, input_dict: dict[str, Any], instruction: str = "Represent the user's input.") -> list[dict]:
         """
         format input to conversation format
         deal with image path
         Args:
-            input_dict: Dict with 'text' and optional 'image'
+            input_dict: dict with 'text' and optional 'image'
         """
         content = []
         

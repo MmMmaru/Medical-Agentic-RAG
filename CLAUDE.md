@@ -1,148 +1,197 @@
-# CLAUDE.md
+# Medical-Agentic-RAG 项目文档
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## 1. 项目背景
 
-## Project Overview
+针对医疗领域的多模态准确问答，构建一个集成文本、图像和结构化数据的智能问答系统，提升医疗信息检索和患者咨询的效率与准确性。
 
-Medical-Agentic-RAG is a multimodal medical question-answering system that integrates text, images, and structured data for healthcare information retrieval. It implements an agentic RAG (Retrieval-Augmented Generation) architecture with reinforcement learning capabilities.
+## 2. 模型 (Models)
 
-- **Language**: Python 3.10+
-- **Framework**: PyTorch, vLLM, Transformers
-- **Vector DB**: Milvus Lite (default), FAISS
-- **Models**: Qwen3-VL-Embedding-2B, Qwen3-VL-4B/8B-Instruct
+| 模型类型 | 模型名称 | 用途 |
+|---------|---------|------|
+| 多模态大模型 | Qwen3-VL-4B | 主要VLM，用于视觉问答和embedding |
+| 医疗领域模型 | MedGemma-4B | 医疗场景VLM，辅助生成查询 |
+| Embedding模型 | Qwen3-VL-Embedding (微调) | 多模态检索 |
+| Reranker | BGE-Reranker / Medical-Reranker | 检索结果精排序 |
 
-## Common Commands
+## 3. 数据集 (Datasets)
 
-### Environment Setup
-```bash
-conda create -n medrag python=3.10
-conda activate medrag
-pip install -r requirements.txt
+### 3.1 基础数据集
+基于 MedVL-thinker 和 Med-Max 数据集构建：
+
+| 医学领域 | 数据集 | 数据类型 |
+|---------|--------|---------|
+| 放射学 | IU-Xray | 胸部X光图像 + 报告 |
+| 眼科学 | Harvard-FairVLMed | 眼底图像 + 临床数据 |
+| 病理学 | PMC-OA | 开放获取医学文献 |
+| VQA | PMC-VQA | 医学视觉问答对 |
+
+### 3.2 检索数据格式
+- **Query**: 可以是图像(image)、文本(text)或图文组合
+- **Document**: 图像(image) + 报告(report)
+- **来源**: PMC-OA (PubMed Central Open Access)
+
+## 4. 评估基准 (Benchmarks)
+
+| 任务类型 | 基准测试 |
+|---------|---------|
+| 文本问答 | MedQA, MMLU-Med |
+| 图像分类 | MIMIC-CXR, ChestX-ray14 |
+| 视觉问答(VQA) | MedXpertQA, VQA-RAD |
+
+## 5. 技术方案 (Methods)
+
+### 5.1 Naive Method (基线方法)
+
+**目标**: 建立性能基线，评估VLM直接回答的能力。
+
+**方法**:
+- 基于 VLM (Qwen3-VL / MedGemma) 直接进行端到端问答
+- 不引入外部知识检索
+
+**当前结果**:
+- PMC-VQA 100题准确率: 0.45 (45%)
+
+### 5.2 多模态RAG构建 (Stage 1)
+
+**目标**: 通过检索增强提升回答准确性，构建多路召回+精排系统。
+
+#### 5.2.1 多路检索机制
+
+```
+Query (Text/Image)
+    │
+    ├──→ [路径1] BM25文本检索器 → 候选文档
+    │
+    └──→ [路径2] Qwen3-VL-Embedding多模态检索器 → 候选文档
+                      │
+                      ↓
+              RRF融合两路结果 (initial_top_k=100)
+                      │
+                      ↓
+              Reranker精排序 → Top-K文档 (top_k=5/10)
+                      │
+                      ↓
+              VLM生成答案
 ```
 
-### Start Model Services (Required before running RAG)
-```bash
-# Terminal 1: Start Embedding Service (vLLM on port 8001)
-bash scripts/embedding_server.sh
+**检索流程**:
+1. **BM25文本检索**: 基于稀疏向量，无需关键词提取
+2. **多模态Embedding检索**: 基于Qwen3-VL-Embedding的稠密向量检索
+3. **RRF融合**: 使用Reciprocal Rank Fusion融合两路检索结果
+4. **Reranker重排**: 使用医疗领域reranker模型精排序
 
-# Terminal 2: Start VLM Service (vLLM on port 8000)
-bash scripts/vlm_server.sh
+#### 5.2.2 数据准备与处理
+
+**Query类型**:
+- 图像问答: 图像 + 问题
+- 文本检索: 纯文本问题
+
+**文档格式**:
+- Image + Report (来源于PMC-OA)
+
+**领域过滤 (TODO)**:
+- 利用MLLM生成领域标签(domain)
+- 在子集中进行定向搜索，提升检索效率
+
+#### 5.2.3 Embedding模型微调
+
+**目标**: 统一图像-文本向量空间，通过对比学习提升召回率。
+
+**正样本构建**:
+- **图像问答数据**: 通过 Qwen3-VL-8B 或 MedGemma-4B 将病例图像和报告改写为(image+问题)格式，检索对应的(image+report)作为正样本
+- **文本检索数据**: 改写文本问题，检索对应(image+report)作为正样本
+- **策略**: 对于VQA数据集生成report；对于带report的数据集生成query
+
+**负样本采样 (困难负样本)**:
+1. 先检索Top-10候选样本
+2. 选取满足条件 $s < s^+ + \delta$ 的样本作为负样本
+3. 目的: 避免假阴性(FN)，提升模型判别能力
+
+**评估指标**:
+- **Recall@K**: Top-K结果中包含Gold Document的比例
+  - Recall@5, Recall@10为主要观测指标
+- **MRR (Mean Reciprocal Rank)**: 正确文档倒数排名的平均值
+  - 反映模型整体排序质量
+
+### 5.3 Agentic RAG (Stage 2)
+
+**目标**: 引入Agent能力，通过工具调用和强化学习优化问答流程。
+
+**技术栈**:
+- 框架: VERL ( Efficient RL for LLM/VLM)
+- 算法: GRPO (Group Relative Policy Optimization)
+
+**奖励函数**:
+- 基础版本: 简单的文本匹配 (exact match / F1 score)
+- 进阶版本: 医学实体匹配 + 语义相似度
+
+**工具设计**:
+1. **文本检索工具**: 基于文本query检索相关文档
+2. **图像检索工具**: 基于图像或图文query检索相关文档
+
+**Agent决策流程**:
+```
+用户Query → Agent决策 → [选择工具] → 检索结果 → VLM生成 → 答案
+                ↓
+         [直接回答] (当不需要检索时)
 ```
 
-### Run RAG System
-```bash
-# Basic retrieval test
-python MMRAG/MMRAG.py
+## 6. 项目规范
 
-# Embedding service test
-python MMRAG/model_service/embedding_service.py
-```
+- 该文档使用中文编写
+- 每个模块实现时需在项目根目录维护 `docs/xx.md` 文档
+- 功能更新后需同步更新对应文档，并在CLAUDE.md记录变更
+- 使用subagents并行编写代码和测试案例
+- 开发环境: Windows系统
 
-### Training
-```bash
-# FSDP multi-GPU training for embedding fine-tuning
-cd train/finetune_embedding
-torchrun --nproc_per_node=4 train_fsdp.py \
-    --model_name Qwen/Qwen3-VL-Embedding-2B \
-    --train_data <path> \
-    --output_dir <path> \
-    --ckpt <path>
-```
+## 7. 任务清单 (TODO)
 
-## Architecture
+### Stage 0: 基础设施
+- [x] 项目基础结构搭建
+- [x] 数据集加载模块 (IU-Xray, Harvard-FairVLMed, PMC-OA, PMC-VQA)
+- [ ] Milvus向量数据库部署与配置
+- [ ] 文档完善 (docs/api_reference.md, docs/architecture.md, docs/datasets.md)
 
-### Layer Structure
-```
-Application Layer (Web UI, API Server, Evaluation)
-    ↓
-Agentic RAG Layer (RL Agent: Planner, Tool Executor, Memory)
-    ↓
-Core RAG Layer (MMRAG Engine, Retrieval Pipeline)
-    ↓
-Model Service Layer (Embedding Service, VLM Service, Reranker)
-    ↓
-Data Layer (Milvus/FAISS Vector DB, Dataset Cache)
-```
+### Stage 1: 多模态RAG (当前重点)
+- [x] BM25文本检索器实现 (MMRAG/DB/bm25_storage.py)
+- [x] Qwen3-VL-Embedding服务封装
+- [x] RRF融合算法实现 (MMRAG/retrieval_fusion.py)
+- [x] MMRAG主类混合检索集成 (MMRAG/MMRAG.py hybrid_retrieve)
+- [ ] Reranker服务集成
+- [ ] 领域标签生成模块 (MLLM-based domain分类)
+- [x] Embedding微调数据生成管道
+  - [x] VQA数据集 → Report生成
+  - [x] Report数据集 → Query生成
+- [ ] 困难负样本采样实现
+- [ ] 微调训练脚本 (DDP/FSDP)
+- [ ] 检索性能评估 (Recall@K, MRR)
+- [ ] 端到端RAG评测
 
-### Key Components
+### Stage 2: Agentic RAG
+- [ ] VERL框架集成
+- [ ] GRPO训练配置
+- [ ] 文本检索工具定义
+- [ ] 图像检索工具定义
+- [ ] Agent决策逻辑实现
+- [ ] 奖励函数实现 (文本匹配 → 语义匹配)
+- [ ] RL训练管道
+- [ ] Agentic RAG评测
 
-**MMRAG Engine** (`MMRAG/MMRAG.py`)
-- Main orchestration class for document ingestion and retrieval
-- Key methods: `ingest_dataset()`, `retrieve()`, `delete_document()`
-- Uses async/await pattern throughout
+### Stage 3: 评估与优化
+- [ ] MedQA基准测试
+- [ ] MMLU-Med基准测试
+- [ ] MIMIC-CXR分类评估
+- [ ] MedXpertQA/VQA-RAD评估
+- [ ] 与Naive方法对比分析
+- [ ] 错误案例分析
 
-**DataChunk** (`MMRAG/base.py`)
-- Core data structure: `doc_id`, `chunk_id`, `content`, `image_paths`, `vector`, `metadata`
-- `dict_to_datachunk()` converts dataset dicts to DataChunk objects
+### Stage 4: 部署与文档
+- [ ] 模型量化与优化
+- [ ] API服务封装
+- [ ] 前端交互界面 (可选)
+- [ ] 完整技术报告
+- [ ] 代码仓库整理与开源准备
 
-**Vector Storage** (`MMRAG/DB/milvus_vectorDB.py`)
-- MilvusVectorStorage: Local file-based vector DB (`.db` files)
-- Schema: chunk_id (PK), vector (2048-dim), doc_id, content, image_paths, metadata
-- Alternative: FAISS implementation in `faiss_vectorDB.py`
+---
 
-**Embedding Service** (`MMRAG/model_service/embedding_service.py`)
-- `OpenaiEmbeddingService`: Connects to local vLLM server (port 8001)
-- `VllmEmbeddingService`: Direct vLLM integration
-- Input format: `[{"text": "...", "image": "path_or_url"}]`
-- Supports base64 encoding for local images, URL fetching for remote images
-
-**VLM Service** (`MMRAG/model_service/vlm_service.py`)
-- Connects to vLLM server on port 8000 for generation
-- OpenAI-compatible API
-
-### Data Flow
-
-**Ingestion**: Raw Dataset → DataChunk → Embedding (batch) → Vector Store
-**Retrieval**: Query → Embedding → Vector Search → Ranked DataChunks
-
-### Dataset Processing
-
-Dataset loaders in `data/` directory:
-- `medmax.py`: MedMax multi-task medical dataset
-- `IU_Xray.py`: Radiology chest X-ray
-- `Harvard_fairVLMed.py`: Ophthalmology VQA
-- `pmc_oa.py`: Pathology open access
-- `pmc_vqa.py`: Pathology VQA
-
-## Configuration
-
-### Environment Variables (`.env`)
-```bash
-HF_HOME=E:/PROJECT/Medical-agentic-rag/.cache/huggingface
-HF_TOKEN=<your_token>
-```
-
-### Service Configuration
-- Embedding service runs on `127.0.0.1:8001`
-- VLM service runs on `127.0.0.1:8000`
-- GPU memory utilization: 0.8 for embedding, 0.4 for VLM
-- Max model length: 4096 tokens
-
-## Important Implementation Details
-
-**Async Pattern**: All I/O operations use async/await. Main methods:
-- `MMRAG.ingest_dataset()` - async
-- `MMRAG.retrieve()` - async
-- `EmbeddingService.async_embed_batch()` - async
-
-**Image Handling**: Images can be:
-- Local paths (converted to base64)
-- URLs (http/https/oss, fetched at runtime)
-- PIL Image objects
-
-**Vector Dimension**: 2048 (from Qwen3-VL-Embedding-2B)
-
-**Batch Processing**: Default batch size 128 for embedding, configurable in `MMRAG.insert_batch_size`
-
-## Extension Points
-
-**New Vector Database**: Inherit from `BaseVectorStorage` (`MMRAG/base.py`)
-**New Embedding Service**: Inherit from `EmbeddingService`
-**New Dataset**: Create loader in `data/` following existing patterns
-
-## Documentation
-
-- `docs/architecture.md`: System design and data flow
-- `docs/datasets.md`: Dataset preparation
-- `docs/training.md`: Model fine-tuning
-- `docs/evaluation.md`: Performance evaluation
+**最后更新**: 2026-02-04

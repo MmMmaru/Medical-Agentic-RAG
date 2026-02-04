@@ -41,7 +41,7 @@ def logger(content):
 def format_messages(sample, include_options: bool = True) -> str:
     """
     Args:
-      sample: Dict
+      sample: dict
     将 MedQA 样本转换为 Zero-shot Prompt。
     可以根据你的微调格式修改此模板。
     """

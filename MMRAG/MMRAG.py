@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, dict, list, Optional
 import os
 import json
 from datasets import load_dataset
@@ -11,8 +11,11 @@ if __name__ == "__main__":
 
 from data.pmc_oa import PMCOADataset
 from MMRAG.model_service.embedding_service import EmbeddingService, OpenaiEmbeddingService
+from MMRAG.model_service.rerank_service import OpenAIRerankerService
 from MMRAG.model_service.vlm_service import VLMService
 from MMRAG.DB.milvus_vectorDB import MilvusVectorStorage
+from MMRAG.DB.bm25_storage import BM25Storage
+from MMRAG.retrieval_fusion import rrf_fuse
 from MMRAG.utils import logger, compute_mdhash_id
 from MMRAG.base import DataChunk, dict_to_datachunk
 
@@ -26,11 +29,13 @@ class MMRAG:
     def __init__(
         self,
         embedding_service: OpenaiEmbeddingService,
+        rerank_service: OpenAIRerankerService,
         llm_service: VLMService,
         workspace: str = "./workspace",
     ):
         self.workspace = workspace
         self.embedding_service = embedding_service
+        self.rerank_service = rerank_service
         self.llm_service = llm_service
         self.insert_batch_size = 256
         
@@ -41,8 +46,15 @@ class MMRAG:
             auto_save=True,
             save_interval=50
         )
+
+        # 初始化BM25存储
+        self.bm25_storage = BM25Storage(
+            workspace=workspace,
+            k1=1.5,
+            b=0.75
+        )
     
-    async def aquery(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    async def aquery(query: str, top_k: int = 5) -> list[dict[str, Any]]:
         """
         多模态RAG异步查询接口
         Args:
@@ -77,7 +89,7 @@ class MMRAG:
         doc_id = compute_mdhash_id(dataset_name, prefix="doc_")
         chunk_ids = []
 
-        async def process_chunk(data: List[Dict]):
+        async def process_chunk(data: list[dict]):
             # 向量化图片和文本
 
             vectors = await self.embedding_service.async_embed_batch(data, batch_size=self.insert_batch_size)
@@ -92,11 +104,12 @@ class MMRAG:
                 chunk_ids.append(chunk.chunk_id)
                 chunks.append(chunk)
             
-            # 5. 存储到向量库
+            # 5. 存储到向量库和BM25索引
             await self.vector_storage.upsert(chunks)
+            await self.bm25_storage.upsert(chunks)
 
         for i in range(0, len(dataset), self.insert_batch_size):
-            # 下面这一行直接把 slice 转成了 List[Dict] 对象
+            # 下面这一行直接把 slice 转成了 list[dict] 对象
             # batch = dataset[i:i+self.insert_batch_size]
             batch = [dataset[j] for j in range(i, min(i + self.insert_batch_size, len(dataset)))]
             await process_chunk(batch)
@@ -107,19 +120,101 @@ class MMRAG:
         logger.info(f"Ingested document {doc_id} with {len(chunk_ids)} chunks")
     
     
-    async def retrieve(self, query: List[Dict[str, str]], top_k: int = 5) -> list[DataChunk]:
+    async def naive_retrieve(self, query: list[dict], top_k: int = 5) -> list[dict]:
         """执行检索流程"""
         # 1. 查询向量化
         # 2. 向量搜索
         # 3. 结果排序
         query_index = await self.embedding_service.async_embed_batch(query)
         results = await self.vector_storage.search(query_index[0], top_k=top_k)
-        return results
-        
-    async def rerank(self, query: str, chunks: list[DataChunk]) -> list[DataChunk]:
-        """可选：使用重排模型优化结果（Cohere/BGE-reranker）"""
-        pass
 
+        return results
+
+    async def hybrid_retrieve(
+        self,
+        query_text: str,
+        query_image_paths: Optional[list[str]] = None,
+        top_k: int = 10,
+        fusion_k: float = 60.0,
+        initial_top_k: int = 100
+    ) -> list[DataChunk]:
+        """
+        混合检索：结合Dense向量检索和BM25稀疏检索，使用RRF融合结果
+
+        Args:
+            query_text: 查询文本
+            query_image_paths: 可选的查询图像路径列表
+            top_k: 最终返回的结果数量
+            fusion_k: RRF融合常数（默认60）
+            initial_top_k: 从每种检索方式获取的初始结果数量
+
+        Returns:
+            List[DataChunk]: 融合后的检索结果，包含完整的文档内容
+        """
+        # 1. 准备查询
+        query = {"text": query_text}
+        if query_image_paths:
+            query["image_paths"] = query_image_paths
+
+        # 2. Dense检索（向量检索）
+        query_vectors = await self.embedding_service.async_embed_batch([query])
+        dense_results = await self.vector_storage.search(query_vectors[0], top_k=initial_top_k)
+
+        # 转换为 (chunk_id, score) 格式
+        dense_scores = [
+            (chunk.chunk_id, chunk.metadata.get("score", 0.0))
+            for chunk in dense_results
+            if chunk.chunk_id
+        ]
+
+        # 3. Sparse检索（BM25）
+        bm25_results = await self.bm25_storage.search(query_text, top_k=initial_top_k)
+        # BM25结果已经是 (chunk_id, score) 格式
+
+        # 4. RRF融合
+        fused_results = rrf_fuse(
+            dense_results=dense_scores,
+            sparse_results=bm25_results,
+            k=fusion_k,
+            top_k=top_k
+        )
+
+        # 5. 获取完整的文档内容
+        # 从dense_results构建chunk_id到DataChunk的映射
+        chunk_map = {chunk.chunk_id: chunk for chunk in dense_results}
+
+        # 对于BM25独有的结果，需要从存储中获取
+        final_results = []
+        for chunk_id, rrf_score in fused_results:
+            if chunk_id in chunk_map:
+                chunk = chunk_map[chunk_id]
+                # 更新metadata中的RRF分数
+                chunk.metadata["rrf_score"] = rrf_score
+                chunk.metadata["fusion_method"] = "rrf"
+                final_results.append(chunk)
+            else:
+                # 尝试从BM25存储获取原始文本
+                text = self.bm25_storage.get_document(chunk_id)
+                if text:
+                    chunk = DataChunk(
+                        chunk_id=chunk_id,
+                        content=text,
+                        metadata={"rrf_score": rrf_score, "fusion_method": "rrf", "source": "bm25"}
+                    )
+                    final_results.append(chunk)
+
+        logger.info(f"Hybrid retrieval: dense={len(dense_scores)}, sparse={len(bm25_results)}, "
+                   f"fused={len(final_results)}")
+
+        return final_results
+    
+    async def rerank(self, query: str, chunks: list[dict]) -> list[dict]:
+        """可选：使用重排模型优化结果（Cohere/BGE-reranker）"""
+        chunks = [chunk.to_dict() for chunk in chunks ]
+        scores = await self.rerank_service.async_generate_batch([query], chunks)
+        scores = scores[0]
+        sorted_chunks = [chunk for _, chunk in sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)]
+        return sorted_chunks
 
     async def delete_document(self, doc_id: str) -> None:
         """删除文档（级联删除分块）"""
@@ -134,6 +229,7 @@ class MMRAG:
     async def shutdown(self) -> None:
         """优雅关闭（确保数据持久化）"""
         await self.vector_storage.save_to_disk()
+        await self.bm25_storage.persist()
         logger.info("RAG system shutdown complete")
 
     def delete_rag(self):

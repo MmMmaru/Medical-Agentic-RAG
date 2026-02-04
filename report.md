@@ -7,4 +7,3 @@ MRR: 0.6504047619047619
 ## stage2 with BM25 + dense vector search
 ## stage3 with rerank
 ## stage4 with finetuned embedding model
-

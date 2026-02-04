@@ -23,7 +23,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List
+from typing import Any, dict, list
 
 import click
 import openai
@@ -48,10 +48,10 @@ def pil_to_base64(img: Image.Image, fmt: str = "JPEG") -> str:
 def build_messages(
     image_b64: str,
     question: str,
-    options: Dict[str, str],
+    options: dict[str, str],
     system_prompt: str,
     cot: bool,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Construct OpenAI vision chat messages with CoT prompt."""
     prompt_lines = [
         """You should provide your thoughts within <think> </think> tags, then answer with just one of the options below within <answer> </answer> tags (For example, if the question is \n’Is the earth flat?\n A: Yes\nB: No’, you should answer with <think>...</think> <answer>B: No</answer>)."""

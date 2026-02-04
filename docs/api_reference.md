@@ -51,9 +51,9 @@ await rag.ingest_dataset("UCSC-VLAA/MedVLThinker-Eval", dataset_size=100)
 ```python
 async def retrieve(
     self,
-    query: List[Dict[str, str]],
+    query: list[dict[str, str]],
     top_k: int = 5
-) -> List[DataChunk]
+) -> list[DataChunk]
 ```
 
 执行向量检索。
@@ -62,7 +62,7 @@ async def retrieve(
 - `query`: 查询列表，每个元素为 `{"text": "...", "image": "..."}`
 - `top_k`: 返回结果数量
 
-**返回**: `List[DataChunk]`
+**返回**: `list[DataChunk]`
 
 **示例**:
 ```python
@@ -94,9 +94,9 @@ class EmbeddingService(ABC):
     @abstractmethod
     async def async_embed_batch(
         self,
-        inputs: List[Dict[str, Any]],
+        inputs: list[dict[str, Any]],
         batch_size: int = 128
-    ) -> List[List[float]]
+    ) -> list[list[float]]
 ```
 
 ### VllmEmbeddingService
@@ -145,14 +145,14 @@ class OpenaiEmbeddingService(EmbeddingService):
 ```python
 class BaseVectorStorage(ABC):
     @abstractmethod
-    async def upsert(self, chunks: List[DataChunk]) -> None
+    async def upsert(self, chunks: list[DataChunk]) -> None
 
     @abstractmethod
     async def search(
         self,
-        query_vector: List[float],
+        query_vector: list[float],
         top_k: int = 5
-    ) -> List[DataChunk]
+    ) -> list[DataChunk]
 
     @abstractmethod
     async def delete_by_doc_id(self, doc_id: str) -> None
@@ -175,7 +175,7 @@ class MilvusVectorStorage(BaseVectorStorage):
 
 #### upsert
 ```python
-async def upsert(self, chunks: List[DataChunk]) -> None
+async def upsert(self, chunks: list[DataChunk]) -> None
 ```
 插入或更新文本块。
 
@@ -183,9 +183,9 @@ async def upsert(self, chunks: List[DataChunk]) -> None
 ```python
 async def search(
     self,
-    query_vector: List[float],
+    query_vector: list[float],
     top_k: int = 5
-) -> List[DataChunk]
+) -> list[DataChunk]
 ```
 向量检索。
 
@@ -213,8 +213,8 @@ class DataChunk:
     doc_id: Optional[str] = None
     chunk_id: Optional[str] = None
     content: Optional[str] = None
-    image_paths: List[str] = field(default_factory=list)
-    vector: List[float] = field(default_factory=list)
+    image_paths: list[str] = field(default_factory=list)
+    vector: list[float] = field(default_factory=list)
     dataset_id: Optional[str] = None
     file_path: Optional[str] = None
     metadata: dict = field(default_factory=dict)
@@ -230,7 +230,7 @@ class DataChunk:
 class QueryResult:
     answer: str
     query: str
-    references: List[DataChunk] = field(default_factory=list)
+    references: list[DataChunk] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
 ```
 
@@ -257,9 +257,9 @@ def compute_mdhash_id(content: str, prefix: str = "chunk_") -> str
 
 ```python
 def encode_image_paths_to_base64(
-    image_paths: List[str],
+    image_paths: list[str],
     max_size: int = 1024
-) -> List[Dict]
+) -> list[dict]
 ```
 将图像路径列表编码为base64格式。
 
@@ -298,7 +298,7 @@ class BaseDataset(Dataset):
     def evaluate(
         self,
         index: int,
-        conversation: Dict
+        conversation: dict
     ) -> int
 ```
 

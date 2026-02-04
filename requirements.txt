@@ -13,3 +13,5 @@ transformers
 click
 tqdm
 huggingface_hub
+rank-bm25>=0.2.2
+jieba>=0.42.1
