@@ -6,7 +6,7 @@ vllm serve Qwen/Qwen3-VL-4B-Instruct \
     --uvicorn-log-level info \
     --dtype bfloat16 \
     --max-model-len 4096 \
-    --max-num-seqs 256 \
+    --max-num-seqs 128 \
     --gpu-memory-utilization 0.4 \
 
 # vllm serve google/medgemma-1.5-4b-it \

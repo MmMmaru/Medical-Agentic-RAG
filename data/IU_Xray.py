@@ -7,7 +7,7 @@ from datasets import load_dataset, load_from_disk
 import os
 from torch.utils.data import Dataset
 import asyncio
-from typing import list, dict, Any
+from typing import List, Dict, Any
 import sys
 import json
 

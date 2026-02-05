@@ -8,8 +8,7 @@ from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
 import functools
 import argparse
-from peft import LoraConfig, PeftModel, get_peft_model
-from datasets import load_from_disk
+from peft import LoraConfig, PeftModel, get_peft_model, TaskType
 from qwen3_vl_embedding import Qwen3VLForEmbedding, Qwen3VLEmbeddingProcessor
 
 if __name__ == "__main__":
@@ -27,7 +26,7 @@ def load_lora_model(model_name, peft_config=None):
     processor = Qwen3VLEmbeddingProcessor(model_name)
     if peft_config is not None:
         model = get_peft_model(model, peft_config)
-    print()
+        model.print_trainable_parameters()
     return model, processor
 
 class ContrastiveLoss(nn.Module):
@@ -83,44 +82,44 @@ def collate_fn(batch, processor):
 def main():
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', required=True, default="Qwen/Qwen3-VL-Embedding-2B", help="path or name to model")
-    parser.add_argument('--train_data', required=True, type=str, help="path to train data")
+    parser.add_argument('--model_name', default="Qwen/Qwen3-VL-Embedding-2B", help="path or name to model")
+    parser.add_argument('--train_data', default="pmc-oa", type=str, help="path to train data")
     parser.add_argument('--val_data', default="", type=str, help="path to val data")
 
     # parser.add_argument('--ds', required=True, type=str, help="deepspeed config")
     parser.add_argument('--output_dir', default="./checkpoint", type=str, help="output directory")
 
     parser.add_argument('--resume', default=False, action='store_true', help='resume from the last checkpoint')         
-
-    parser.add_argument('--lora', default=False, action='store_true', help='lora finetuning')         
+    # lora config
+    parser.add_argument('--lora', default=True, action='store_true', help='lora finetuning')         
     parser.add_argument('--lora_r', type=int, default=16, help="lora r")         
-    parser.add_argument('--lora_alpha', type=int, default=16, help="lora alpha")         
+    parser.add_argument('--lora_alpha', type=int, default=32, help="lora alpha")
     parser.add_argument('--lora_dropout', type=float, default=0.05, help="lora dropout")         
-
+    # training config
     parser.add_argument('--lr', type=float, default=1e-5, help="learning rate")         
     parser.add_argument('--epoch', type=int, default=1, help="num of epochs")         
-    parser.add_argument('--grad_acc', type=int, default=1, help="gradient accumulation steps")         
+    parser.add_argument('--grad_acc', type=int, default=2, help="gradient accumulation steps")         
     parser.add_argument('--steps', type=int, default=-1, help="num of training steps")         
-    parser.add_argument('--bs', type=int, default=1, help="per device batch size")
+    parser.add_argument('--bs', type=int, default=64, help="per device batch size")
     parser.add_argument('--save_steps', type=float, default=100, help="save checkpoints every save_steps of the training run")         
     parser.add_argument('--logging_steps', type=float, default=0.001, help="logging at every logging_steps of the total training steps")         
     parser.add_argument('--eval_steps', type=float, default=0.1, help="evaluate at every evaluation steps of the total training steps")         
     parser.add_argument('--warmup_ratio', type=float, default=0.0, help="warmup ratio")         
     parser.add_argument('--lr_scheduler', default="cosine", type=str, help="lr scheduler")
-
-    parser.add_argument('--bf16', default=False, action='store_true', help='bf16')         
-    parser.add_argument('--fp16', default=False, action='store_true', help='fp16')         
-
-    parser.add_argument('--wandb', default=False, action='store_true', help='wandb or not')         
-    parser.add_argument('--wandb_entity', default="", type=str, help='wandb entity')         
-    parser.add_argument('--name', default="", type=str, help="wandb experiment name")
+    # wandb
+    parser.add_argument("--wandb_project", default="FT-lora-Qwen3-VL-Embedding-2B")
 
     args = parser.parse_args()
+    
+    # init
+    if os.getenv("RANK", -1) == -1:
+        local_rank = 0 # not ddp
+    else:
+        dist.init_process_group("nccl")
+        rank = dist.get_rank()
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local_rank)
 
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
-    local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(local_rank)
     device = f"cuda:{local_rank}"
 
     peft_config = None
@@ -129,22 +128,31 @@ def main():
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
             lora_dropout=args.lora_dropout,
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "up_proj", "down_proj","gate_proj"],
-            task_type="CAUSAL_LM",
+            target_modules=["q_proj", "v_proj", "k_proj"],
+            # target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "up_proj", "down_proj","gate_proj"],
+            task_type=TaskType.FEATURE_EXTRACTION,
         )
-    # 1. Model & Processor
+    # init wandb
+    runname = f"Finetune-{args.model_name}-lora_rank-{args.lora_r}-lr-{args.lr}"
+    import wandb
+    wandb.init(
+        project = args.wandb_project,
+        name = runname
+    )
+    # load Model & Processor
     model, processor = load_lora_model(args.model_name, peft_config)
 
     model.to(device)
     # model = torch.compile(model)
-    model = DistributedDataParallel(model, device_ids=[local_rank])
+    if dist.is_initialized():
+        model = DistributedDataParallel(model, device_ids=[local_rank])
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     criterion = ContrastiveLoss().to(device)
     
-    # 3. Data
-    dataset = PMCOADataset(args.train_data, processor)
-    sampler = DistributedSampler(dataset, rank=rank)
+    # Data
+    dataset = PMCOADataset(args.train_data)
+    sampler = DistributedSampler(dataset, rank=rank) if dist.is_initialized() else None
     dataloader = DataLoader(
         dataset, 
         batch_size=64, 
@@ -154,10 +162,9 @@ def main():
 
     # 4. Training Loop
     model.train()
-    num_epochs = 3
-    
+    num_epochs = 1
+    # TODO: set autocast to params
     for epoch in range(num_epochs):
-        sampler.set_epoch(epoch)
         for step, inputs in enumerate(dataloader):
             optimizer.zero_grad()
             query_inputs = {k: v.to(device) for k,v in inputs['query'].items()}
@@ -177,6 +184,7 @@ def main():
                 print(f"Epoch {epoch}, Step {step}, Loss: {loss.item():.4f}")
             if rank == 0 and (step+1) % args.save_steps == 0:
                 model.save_pretrained(output_dir)
+
         if (step+1) % args.grad_acc != 0:
             optimizer.step()
             optimizer.zero_grad()

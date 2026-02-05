@@ -7,6 +7,5 @@ vllm serve Qwen/Qwen3-VL-Embedding-2B \
     --runner pooling \
     --tensor-parallel-size 1 \
     --max-model-len 4096 \
-    --max-num-seqs 256 \
-    --gpu-memory-utilization 0.8 \
-    --served-model-name Qwen3-VL-Embedding-2B
+    --max-num-seqs 128 \
+    --gpu-memory-utilization 0.2 \

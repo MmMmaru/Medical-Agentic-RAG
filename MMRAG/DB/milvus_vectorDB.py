@@ -2,7 +2,7 @@ import asyncio
 import os
 import shutil
 import json
-from typing import list, dict, Any, Optional
+from typing import List, Dict, Any, Optional
 from ..utils import logger
 from ..base import DataChunk, dict_to_datachunk, BaseVectorStorage
 

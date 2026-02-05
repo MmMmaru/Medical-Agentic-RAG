@@ -1,5 +1,5 @@
 import numpy as np
-from typing import list, dict, Any
+from typing import List, Dict, Any
 from vllm import LLM, EngineArgs
 from vllm.multimodal.utils import fetch_image
 from dotenv import load_dotenv
@@ -16,9 +16,9 @@ import sys
 import os
 # 获取当前文件所在目录的父目录的父目录（即项目根目录）
 if __name__ == "__main__":
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sys.path[0] = os.getcwd()
 
-from ..utils import logger
+from MMRAG.utils import logger
 
 load_dotenv()
 class EmbeddingService:

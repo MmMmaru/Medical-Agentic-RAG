@@ -6,7 +6,7 @@ import logging
 
 from PIL import Image
 from dataclasses import dataclass
-from typing import Optional, list, Union, dict, Any
+from typing import Optional, List, Union, Dict, Any
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLPreTrainedModel, Qwen3VLModel, Qwen3VLConfig
 from transformers.models.qwen3_vl.processing_qwen3_vl import Qwen3VLProcessor
 from transformers.modeling_outputs import ModelOutput
@@ -102,7 +102,7 @@ class Qwen3VLForEmbedding(Qwen3VLPreTrainedModel):
                 normalize:bool = True, 
                 logits_to_keep: Union[int, torch.Tensor] = 0,
                 **kwargs: Unpack[TransformersKwargs],
-    ) -> Union[tuple, Qwen3VLForEmbeddingOutput]:
+    ) -> torch.Tensor:
         # Pass inputs through the model
         outputs = self.model(
             input_ids=input_ids,
@@ -118,12 +118,188 @@ class Qwen3VLForEmbedding(Qwen3VLPreTrainedModel):
             **kwargs,
         )
         # Return the model output
-        embeddings = self._pooling_last(outputs['last_hidden_state'], outputs['attention_mask'])
+        embeddings = self._pooling_last(outputs['last_hidden_state'], attention_mask)
 
         # Normalize the embeddings if specified
         if normalize:
             embeddings = F.normalize(embeddings, p=2, dim=-1)
         return embeddings
+
+# Define embedder class for processing inputs and generating embeddings
+class Qwen3VLEmbeddingProcessor():
+    def __init__(
+        self, 
+        model_name_or_path: str, 
+        max_length: int = MAX_LENGTH,
+        min_pixels: int = MIN_PIXELS,
+        max_pixels: int = MAX_PIXELS,
+        total_pixels: int = MAX_TOTAL_PIXELS,
+        fps: float = FPS,
+        num_frames: int = MAX_FRAMES,
+        max_frames: int = MAX_FRAMES,
+        default_instruction: str = "Represent the user's input.",
+        **kwargs
+    ):
+        self.max_length = max_length
+        self.min_pixels = min_pixels
+        self.max_pixels = max_pixels
+        self.total_pixels = total_pixels
+        self.fps = fps
+        self.num_frames = num_frames
+        self.max_frames = max_frames
+
+        self.default_instruction = default_instruction
+        self.processor = Qwen3VLProcessor.from_pretrained(
+            model_name_or_path, padding_side='right'
+        )
+
+    # Truncate token sequence to a specified max length
+    def _truncate_tokens(self, token_ids: list[int], max_length: int) -> list[int]:
+        if len(token_ids) <= max_length:
+            return token_ids
+
+        special_token_ids = set(self.processor.tokenizer.all_special_ids)
+        num_special = sum(1 for token_idx in token_ids if token_idx in special_token_ids)
+        num_non_special_to_keep = max_length - num_special
+
+        final_token_ids = []
+        non_special_kept_count = 0
+        # Ensure retention of special tokens while truncating the rest
+        for token_idx in token_ids:
+            if token_idx in special_token_ids:
+                final_token_ids.append(token_idx)
+            elif non_special_kept_count < num_non_special_to_keep:
+                final_token_ids.append(token_idx)
+                non_special_kept_count += 1
+        return final_token_ids
+
+    # Format input based on provided text, image, video, and instruction
+    def format_model_input(
+        self, texts: Optional[list[str]] = None,
+        images: Optional[list[Union[str, Image.Image]]] = None,
+        video: Optional[Union[str, list[Union[str, Image.Image]]]] = None,
+        instruction: Optional[str] = None,
+        fps: Optional[float] = None,
+        max_frames: Optional[int] = None
+    ) -> list[dict]:
+
+        # Ensure instruction ends with punctuation
+        if instruction:
+            instruction = instruction.strip()
+            if instruction and not unicodedata.category(instruction[-1]).startswith('P'):
+                instruction = instruction + '.'
+
+        # Initialize conversation with system prompts
+        content = []
+        conversation = [
+            {"role": "system", "content": [{"type": "text", "text": instruction or self.default_instruction}]},
+            {"role": "user", "content": content}
+        ]
+
+        # Add text, image, or video content to conversation
+        if not texts and not images and not video:
+            content.append({'type': 'text', 'text': "NULL"})
+            return conversation
+
+        if video:
+            video_content = None
+            video_kwargs = { 'total_pixels': self.total_pixels }
+            if isinstance(video, list):
+                video_content = video
+                if self.num_frames is not None or self.max_frames is not None:
+                    video_content = sample_frames(video_content, self.num_frames, self.max_frames)
+                video_content = [
+                    ('file://' + ele if isinstance(ele, str) else ele) 
+                    for ele in video_content
+                ]
+            elif isinstance(video, str):
+                video_content = video if video.startswith(('http://', 'https://')) else 'file://' + video
+                video_kwargs = {'fps': fps or self.fps, 'max_frames': max_frames or self.max_frames,}
+            else:
+                raise TypeError(f"Unrecognized video type: {type(video)}")
+
+            # Add video input details to content
+            if video_content:
+                content.append({
+                    'type': 'video', 'video': video_content,
+                    **video_kwargs
+                })
+
+        if images:
+            for image in images:
+                image_content = None
+                if isinstance(image, Image.Image):
+                    image_content = image
+                elif isinstance(image, str):
+                    image_content = image if image.startswith(('http', 'oss')) else 'file://' + image
+                else:
+                    raise TypeError(f"Unrecognized image type: {type(image)}")
+
+                # Add image input details to content
+                if image_content:
+                    content.append({
+                        'type': 'image', 'image': image_content,
+                        "min_pixels": self.min_pixels,
+                        "max_pixels": self.max_pixels
+                    })
+
+        for text in texts:
+            if text:
+                content.append({'type': 'text', 'text': text})
+
+        return conversation
+
+    # Preprocess input conversations for model consumption
+    def _preprocess_inputs(self, conversations: list[list[dict]]) -> dict[str, torch.Tensor]:
+        text = self.processor.apply_chat_template(
+            conversations, add_generation_prompt=True, tokenize=False
+        )
+
+        try:
+            images, video_inputs, video_kwargs = process_vision_info(
+                conversations, image_patch_size=16,
+                return_video_metadata=True, return_video_kwargs=True
+            )
+        except Exception as e:
+            logger.error(f"Error in processing vision info: {e}")
+            images = None
+            video_inputs = None
+            video_kwargs = {'do_sample_frames': False}
+            text = self.processor.apply_chat_template(
+                [{'role': 'user', 'content': [{'type': 'text', 'text': 'NULL'}]}], 
+                add_generation_prompt=True, tokenize=False
+            )
+
+        if video_inputs is not None:
+            videos, video_metadata = zip(*video_inputs)
+            videos = list(videos)
+            video_metadata = list(video_metadata)
+        else:
+            videos, video_metadata = None, None
+
+        inputs = self.processor(
+            text=text, images=images, videos=videos, video_metadata=video_metadata, truncation=True, 
+            max_length=self.max_length, padding=True, do_resize=False, return_tensors='pt',
+            **video_kwargs
+        )
+        return inputs
+
+    # Process inputs to generate normalized embeddings
+    def process(self, inputs: list[dict[str, list]], normalize: bool = True) -> dict:
+        "处理一条text和多个图像"
+        conversations = [self.format_model_input(
+            texts=[ele.get('text')],
+            images=ele.get('image'),
+            video=ele.get('video'),
+            instruction=ele.get('instruction'),
+            fps=ele.get('fps'),
+            max_frames=ele.get('max_frames')
+        ) for ele in inputs]
+
+        processed_inputs = self._preprocess_inputs(conversations)
+
+        return processed_inputs
+    
 
 def sample_frames(frames: list[Union[str, Image.Image]], num_segments: int, max_segments: int) -> list[str]:
     duration = len(frames)
@@ -143,7 +319,7 @@ def sample_frames(frames: list[Union[str, Image.Image]], num_segments: int, max_
         sampled_frames.append(frames[last_frame_id])
     return sampled_frames[:max_segments]
 
-# Define embedder class for processing inputs and generating embeddings
+# old version
 class Qwen3VLEmbedder():
     def __init__(
         self, 
@@ -347,180 +523,6 @@ class Qwen3VLEmbedder():
 
         return embeddings
 
-# Define embedder class for processing inputs and generating embeddings
-class Qwen3VLEmbeddingProcessor():
-    def __init__(
-        self, 
-        model_name_or_path: str, 
-        max_length: int = MAX_LENGTH,
-        min_pixels: int = MIN_PIXELS,
-        max_pixels: int = MAX_PIXELS,
-        total_pixels: int = MAX_TOTAL_PIXELS,
-        fps: float = FPS,
-        num_frames: int = MAX_FRAMES,
-        max_frames: int = MAX_FRAMES,
-        default_instruction: str = "Represent the user's input.",
-        **kwargs
-    ):
-        self.max_length = max_length
-        self.min_pixels = min_pixels
-        self.max_pixels = max_pixels
-        self.total_pixels = total_pixels
-        self.fps = fps
-        self.num_frames = num_frames
-        self.max_frames = max_frames
-
-        self.default_instruction = default_instruction
-        self.processor = Qwen3VLProcessor.from_pretrained(
-            model_name_or_path, padding_side='right'
-        )
-
-    # Truncate token sequence to a specified max length
-    def _truncate_tokens(self, token_ids: list[int], max_length: int) -> list[int]:
-        if len(token_ids) <= max_length:
-            return token_ids
-
-        special_token_ids = set(self.processor.tokenizer.all_special_ids)
-        num_special = sum(1 for token_idx in token_ids if token_idx in special_token_ids)
-        num_non_special_to_keep = max_length - num_special
-
-        final_token_ids = []
-        non_special_kept_count = 0
-        # Ensure retention of special tokens while truncating the rest
-        for token_idx in token_ids:
-            if token_idx in special_token_ids:
-                final_token_ids.append(token_idx)
-            elif non_special_kept_count < num_non_special_to_keep:
-                final_token_ids.append(token_idx)
-                non_special_kept_count += 1
-        return final_token_ids
-
-    # Format input based on provided text, image, video, and instruction
-    def format_model_input(
-        self, texts: Optional[list[str]] = None,
-        images: Optional[list[Union[str, Image.Image]]] = None,
-        video: Optional[Union[str, list[Union[str, Image.Image]]]] = None,
-        instruction: Optional[str] = None,
-        fps: Optional[float] = None,
-        max_frames: Optional[int] = None
-    ) -> list[dict]:
-
-        # Ensure instruction ends with punctuation
-        if instruction:
-            instruction = instruction.strip()
-            if instruction and not unicodedata.category(instruction[-1]).startswith('P'):
-                instruction = instruction + '.'
-
-        # Initialize conversation with system prompts
-        content = []
-        conversation = [
-            {"role": "system", "content": [{"type": "text", "text": instruction or self.default_instruction}]},
-            {"role": "user", "content": content}
-        ]
-
-        # Add text, image, or video content to conversation
-        if not texts and not images and not video:
-            content.append({'type': 'text', 'text': "NULL"})
-            return conversation
-
-        if video:
-            video_content = None
-            video_kwargs = { 'total_pixels': self.total_pixels }
-            if isinstance(video, list):
-                video_content = video
-                if self.num_frames is not None or self.max_frames is not None:
-                    video_content = sample_frames(video_content, self.num_frames, self.max_frames)
-                video_content = [
-                    ('file://' + ele if isinstance(ele, str) else ele) 
-                    for ele in video_content
-                ]
-            elif isinstance(video, str):
-                video_content = video if video.startswith(('http://', 'https://')) else 'file://' + video
-                video_kwargs = {'fps': fps or self.fps, 'max_frames': max_frames or self.max_frames,}
-            else:
-                raise TypeError(f"Unrecognized video type: {type(video)}")
-
-            # Add video input details to content
-            if video_content:
-                content.append({
-                    'type': 'video', 'video': video_content,
-                    **video_kwargs
-                })
-
-        for image in images:
-            if image:
-                image_content = None
-                if isinstance(image, Image.Image):
-                    image_content = image
-                elif isinstance(image, str):
-                    image_content = image if image.startswith(('http', 'oss')) else 'file://' + image
-                else:
-                    raise TypeError(f"Unrecognized image type: {type(image)}")
-
-                # Add image input details to content
-                if image_content:
-                    content.append({
-                        'type': 'image', 'image': image_content,
-                        "min_pixels": self.min_pixels,
-                        "max_pixels": self.max_pixels
-                    })
-
-        for text in texts:
-            if text:
-                content.append({'type': 'text', 'text': text})
-
-        return conversation
-
-    # Preprocess input conversations for model consumption
-    def _preprocess_inputs(self, conversations: list[list[dict]]) -> dict[str, torch.Tensor]:
-        text = self.processor.apply_chat_template(
-            conversations, add_generation_prompt=True, tokenize=False
-        )
-
-        try:
-            images, video_inputs, video_kwargs = process_vision_info(
-                conversations, image_patch_size=16,
-                return_video_metadata=True, return_video_kwargs=True
-            )
-        except Exception as e:
-            logger.error(f"Error in processing vision info: {e}")
-            images = None
-            video_inputs = None
-            video_kwargs = {'do_sample_frames': False}
-            text = self.processor.apply_chat_template(
-                [{'role': 'user', 'content': [{'type': 'text', 'text': 'NULL'}]}], 
-                add_generation_prompt=True, tokenize=False
-            )
-
-        if video_inputs is not None:
-            videos, video_metadata = zip(*video_inputs)
-            videos = list(videos)
-            video_metadata = list(video_metadata)
-        else:
-            videos, video_metadata = None, None
-
-        inputs = self.processor(
-            text=text, images=images, videos=videos, video_metadata=video_metadata, truncation=True, 
-            max_length=self.max_length, padding=True, do_resize=False, return_tensors='pt',
-            **video_kwargs
-        )
-        return inputs
-
-    # Process inputs to generate normalized embeddings
-    def process(self, inputs: list[dict[str, list]], normalize: bool = True) -> tuple:
-        conversations = [self.format_model_input(
-            texts=[ele.get('text')],
-            images=[ele.get('image')],
-            video=ele.get('video'),
-            instruction=ele.get('instruction'),
-            fps=ele.get('fps'),
-            max_frames=ele.get('max_frames')
-        ) for ele in inputs]
-
-        processed_inputs = self._preprocess_inputs(conversations)
-
-        return processed_inputs
-    
 if __name__ == "__main__":
     from qwen3_vl_embedding import Qwen3VLEmbedder
     import numpy as np

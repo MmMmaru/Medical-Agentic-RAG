@@ -23,8 +23,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, dict, list
-
+from typing import Any, Dict, List
 import click
 import openai
 from datasets import load_dataset

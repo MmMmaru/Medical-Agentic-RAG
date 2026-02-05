@@ -1,4 +1,4 @@
-from typing import Any, dict, list, Optional
+from typing import Any, Optional
 import os
 import json
 from datasets import load_dataset
@@ -258,7 +258,7 @@ async def main():
     # await RAG.ainit_rag(dataset_list)
     print(RAG.vector_storage.client.get_collection_stats(RAG.vector_storage.collection_name)['row_count'])
     query = [{"text": "ICA-derived 3D model"}]
-    results = await RAG.retrieve(query, top_k=5)
+    results = await RAG.hybrid_retrieve(query[0]["text"], top_k=5)
     for r in results:
         print(f'score: {r.metadata.get("score")}: {r.content}')
     
