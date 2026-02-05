@@ -38,22 +38,29 @@ class MMRAG:
         self.rerank_service = rerank_service
         self.llm_service = llm_service
         self.insert_batch_size = 256
+        self.init_RAG()
+    
+    def init_RAG(self):
         
         # 初始化持久化组件
         self.vector_storage = MilvusVectorStorage(
-            workspace=workspace,
-            embedding_dim=embedding_service.embedding_dim,
+            workspace=self.workspace,
+            embedding_dim=self.embedding_service.embedding_dim,
             auto_save=True,
             save_interval=50
         )
 
         # 初始化BM25存储
         self.bm25_storage = BM25Storage(
-            workspace=workspace,
+            workspace=self.workspace,
             k1=1.5,
             b=0.75
         )
-    
+
+    def clear_RAG(self):
+        if os.path.exists(self.workspace):
+            shutil.rmtree(self.workspace)
+
     async def aquery(query: str, top_k: int = 5) -> list[dict[str, Any]]:
         """
         多模态RAG异步查询接口
@@ -127,7 +134,6 @@ class MMRAG:
         # 3. 结果排序
         query_index = await self.embedding_service.async_embed_batch(query)
         results = await self.vector_storage.search(query_index[0], top_k=top_k)
-
         return results
 
     async def hybrid_retrieve(
@@ -231,11 +237,6 @@ class MMRAG:
         await self.vector_storage.save_to_disk()
         await self.bm25_storage.persist()
         logger.info("RAG system shutdown complete")
-
-    def delete_rag(self):
-        # TODO: delete workspace folder
-        os.delete(self.workspace)
-        logger.info("Deleted RAG workspace")
 
 async def main():
     # # first init

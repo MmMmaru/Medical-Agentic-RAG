@@ -79,6 +79,78 @@ dataset.process_dataset(dataset_size=100, rewrite=True)
 - 多选题格式
 - 专业知识密集
 
+### 6. MedVLThinker-Eval
+
+**来源**: HuggingFace `UCSC-VLAA/MedVLThinker-Eval`
+
+**特点**:
+- 多模态医疗VQA评估基准
+- 多选题格式 (A/B/C/D)
+- 支持多个子数据集 (MMMU, MedXpertQA, VQA-RAD等)
+- 用于端到端RAG系统评估
+
+**原始数据格式**:
+```python
+{
+    "images": [PIL.Image.Image],  # 图像列表
+    "question": "What is the most likely diagnosis?",
+    "options": "A. Diagnosis A\nB. Diagnosis B\nC. Diagnosis C\nD. Diagnosis D",
+    "answer_label": "A",  # 正确答案标签
+    "answer": "Full answer text",
+    "dataset_name": "MMMU"  # 子数据集名称
+}
+```
+
+**处理后字段**:
+```python
+{
+    "question": str,          # 问题文本
+    "image_paths": list[str], # 图像路径列表
+    "content": str,           # VLM改写的医学案例描述
+    "chunk_id": str,          # 内容哈希ID
+    "answer": str,            # 完整答案文本
+    "answer_label": str,      # 答案标签 (A/B/C/D)
+    "options": str,           # 原始选项字符串
+    "key_words": list[str],   # 关键词列表
+    "dataset_id": str,        # 数据集名称
+    "source": "medvlthinker"
+}
+```
+
+**使用示例**:
+```python
+from data.medvlthinker import MedVLThinkerEval
+from MMRAG.model_service.vlm_service import OpenAIVLMService
+
+# 加载已处理的数据集
+dataset = MedVLThinkerEval("MMMU", dataset_size=100)
+sample = dataset[0]
+
+# 评估预测结果
+item = dataset[0]
+conversation = {
+    "messages": [
+        {"role": "assistant", "content": [{"type": "text", "text": "A"}]}
+    ]
+}
+score = dataset.evaluate(item, conversation)  # 1 或 0
+
+# 预处理数据集
+vlm_service = OpenAIVLMService(
+    model_name="Qwen3-VL-4B-Instruct",
+    api_key="EMPTY",
+    url="http://localhost:8000/v1"
+)
+MedVLThinkerEval.process_dataset(
+    dataset_name="MMMU",  # 或 "all" 处理所有子数据集
+    output_path="datasets/preprocessed_datasets/medvlthinker_MMMU",
+    vlm_service=vlm_service,
+    dataset_size=100
+)
+```
+
+**实现文件**: `data/medvlthinker.py`
+
 ## 数据预处理
 
 ### 通用处理流程

@@ -4,6 +4,8 @@
 
 针对医疗领域的多模态准确问答，构建一个集成文本、图像和结构化数据的智能问答系统，提升医疗信息检索和患者咨询的效率与准确性。
 
+**项目环境**
+你的开发环境未配置，不需要进行测试和环境配置。
 ## 2. 模型 (Models)
 
 | 模型类型 | 模型名称 | 用途 |
@@ -18,12 +20,13 @@
 ### 3.1 基础数据集
 基于 MedVL-thinker 和 Med-Max 数据集构建：
 
-| 医学领域 | 数据集 | 数据类型 |
-|---------|--------|---------|
-| 放射学 | IU-Xray | 胸部X光图像 + 报告 |
-| 眼科学 | Harvard-FairVLMed | 眼底图像 + 临床数据 |
-| 病理学 | PMC-OA | 开放获取医学文献 |
-| VQA | PMC-VQA | 医学视觉问答对 |
+| 医学领域 | 数据集 | 数据类型 | 实现文件 |
+|---------|--------|---------|---------|
+| 放射学 | IU-Xray | 胸部X光图像 + 报告 | `data/IU_Xray.py` |
+| 眼科学 | Harvard-FairVLMed | 眼底图像 + 临床数据 | `data/Harvard_fairVLMed.py` |
+| 病理学 | PMC-OA | 开放获取医学文献 | `data/pmc_oa.py` |
+| VQA | PMC-VQA | 医学视觉问答对 | `data/pmc_vqa.py` |
+| 评估 | MedVLThinker-Eval | 多模态医疗VQA评估 | `data/medvlthinker.py` |
 
 ### 3.2 检索数据格式
 - **Query**: 可以是图像(image)、文本(text)或图文组合
@@ -148,8 +151,9 @@ Query (Text/Image)
 
 ### Stage 0: 基础设施
 - [x] 项目基础结构搭建
-- [x] 数据集加载模块 (IU-Xray, Harvard-FairVLMed, PMC-OA, PMC-VQA)
+- [x] 数据集加载模块 (IU-Xray, Harvard-FairVLMed, PMC-OA, PMC-VQA, MedVLThinker-Eval)
 - [ ] Milvus向量数据库部署与配置
+- [x] 测试文档 (docs/testing.md) - MMRAG测试模块
 - [ ] 文档完善 (docs/api_reference.md, docs/architecture.md, docs/datasets.md)
 
 ### Stage 1: 多模态RAG (当前重点)
@@ -164,8 +168,8 @@ Query (Text/Image)
   - [x] Report数据集 → Query生成
 - [ ] 困难负样本采样实现
 - [ ] 微调训练脚本 (DDP/FSDP)
-- [ ] 检索性能评估 (Recall@K, MRR)
-- [ ] 端到端RAG评测
+- [x] 检索性能评估 (Recall@K, MRR) - `MMRAG/tests/test_rag.py`
+- [x] 端到端RAG评测 - `MMRAG/tests/test_rag.py`
 
 ### Stage 2: Agentic RAG
 - [ ] VERL框架集成
@@ -195,3 +199,13 @@ Query (Text/Image)
 ---
 
 **最后更新**: 2026-02-04
+
+---
+
+## 8. 更新记录
+
+| 日期 | 更新内容 | 相关文件 |
+|------|---------|---------|
+| 2026-02-04 | 完成 MedVLThinker-Eval 数据集类实现 | `data/medvlthinker.py` |
+| 2026-02-04 | 创建 MMRAG 测试模块 | `MMRAG/tests/test_rag.py` |
+| 2026-02-04 | 更新数据集文档 | `docs/datasets.md` |
