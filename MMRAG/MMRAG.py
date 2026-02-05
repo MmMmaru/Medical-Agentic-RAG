@@ -126,15 +126,15 @@ class MMRAG:
         
         logger.info(f"Ingested document {doc_id} with {len(chunk_ids)} chunks")
     
-    
-    async def naive_retrieve(self, query: list[dict], top_k: int = 5) -> list[dict]:
+
+    async def naive_retrieve(self, query: list[dict], top_k: int = 5) -> list[DataChunk]:
         """执行检索流程"""
         # 1. 查询向量化
         # 2. 向量搜索
         # 3. 结果排序
         query_index = await self.embedding_service.async_embed_batch(query)
         results = await self.vector_storage.search(query_index[0], top_k=top_k)
-        return results
+        return [DataChunk(**r) for r in results] # TODO
 
     async def hybrid_retrieve(
         self,
@@ -214,12 +214,12 @@ class MMRAG:
 
         return final_results
     
-    async def rerank(self, query: str, chunks: list[dict]) -> list[dict]:
+    async def rerank(self, query: str, chunks: list[DataChunk]) -> list[DataChunk]:
         """可选：使用重排模型优化结果（Cohere/BGE-reranker）"""
         chunks = [chunk.to_dict() for chunk in chunks ]
         scores = await self.rerank_service.async_generate_batch([query], chunks)
         scores = scores[0]
-        sorted_chunks = [chunk for _, chunk in sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)]
+        sorted_chunks = [DataChunk(**chunk) for _, chunk in sorted(zip(scores, chunks), key=lambda x: x[0], reverse=True)]
         return sorted_chunks
 
     async def delete_document(self, doc_id: str) -> None:

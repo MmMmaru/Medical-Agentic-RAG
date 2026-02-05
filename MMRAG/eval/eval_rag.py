@@ -267,7 +267,8 @@ class TestMMRAG:
         dataset_name: str = "pmc-oa",
         dataset_size: int = None,
         top_k: int = 5,
-        save_results: bool = True
+        save_results: bool = True,
+        initial_top_k: int = 20
     ) -> List[E2ETestResult]:
         """
         Test end-to-end RAG pipeline.
@@ -395,7 +396,8 @@ class TestMMRAG:
         query_image_paths: List[str] = None,
         gold_chunk_id: str = None,
         top_k: int = 10,
-        save_results: bool = True
+        save_results: bool = True,
+        initial_top_k: int = 20
     ) -> Dict[str, Any]:
         """
         Test and compare different retrieval methods.
@@ -426,7 +428,7 @@ class TestMMRAG:
         # Test 1: Dense Retrieval
         start_time = time.time()
         try:
-            query_vectors = await self.embedding_service.async_embed_batch([{"text": query_text}])
+            query_vectors = await self.embedding_service.async_embed_batch([{"content": query_text}])
             dense_results = await self.rag.vector_storage.search(query_vectors[0], top_k=top_k)
             dense_time = time.time() - start_time
 
@@ -480,10 +482,10 @@ class TestMMRAG:
                 query_image_paths=query_image_paths,
                 top_k=top_k
             )
-            hybrid_time = time.time() - start_time
+            stage4_time = time.time() - start_time
 
             results["hybrid"] = {
-                "retrieval_time": hybrid_time,
+                "retrieval_time": stage4_time,
                 "num_results": len(hybrid_results),
                 "results": [
                     {"chunk_id": r.chunk_id, "rrf_score": r.metadata.get("rrf_score", 0)}
@@ -500,21 +502,46 @@ class TestMMRAG:
             logger.error(f"Hybrid retrieval failed: {e}")
             results["hybrid"] = {"error": str(e)}
 
-        # Comparison summary
-        logger.info("=" * 60)
-        logger.info("Retrieval Method Comparison:")
-        logger.info(f"  Dense:   {results.get('dense', {}).get('num_results', 0)} results, "
-                   f"time={results.get('dense', {}).get('retrieval_time', 0):.4f}s")
-        logger.info(f"  Sparse:  {results.get('sparse', {}).get('num_results', 0)} results, "
-                   f"time={results.get('sparse', {}).get('retrieval_time', 0):.4f}s")
-        logger.info(f"  Hybrid:  {results.get('hybrid', {}).get('num_results', 0)} results, "
-                   f"time={results.get('hybrid', {}).get('retrieval_time', 0):.4f}s")
+        # Test 4: Hybrid Retrieval with rerank
+        start_time = time.time()
+        try:
+            
+            # Step 1: Hybrid retrieval
+            retrieved_chunks = await self.rag.hybrid_retrieve(
+                query_text=query_text,
+                query_image_paths=query_image_paths,
+                top_k=initial_top_k
+            )
 
-        if gold_chunk_id:
-            logger.info(f"  Gold chunk rank - Dense: {results.get('dense', {}).get('gold_rank', 'N/A')}, "
-                       f"Sparse: {results.get('sparse', {}).get('gold_rank', 'N/A')}, "
-                       f"Hybrid: {results.get('hybrid', {}).get('gold_rank', 'N/A')}")
-        logger.info("=" * 60)
+            # Step 2: Optional reranking
+            if self.use_reranker and self.rerank_service and retrieved_chunks:
+                try:
+                    hybrid_results = await self.rag.rerank(
+                        query=query_text,
+                        chunks=retrieved_chunks
+                    )
+                except Exception as e:
+                    logger.warning(f"Reranking failed: {e}")
+
+            stage4_time = time.time() - start_time
+
+            results["level4"] = {
+                "retrieval_time": stage4_time,
+                "num_results": len(hybrid_results),
+                "results": [
+                    {"chunk_id": r.chunk_id}
+                    for r in hybrid_results
+                ]
+            }
+
+            if gold_chunk_id:
+                hybrid_rank = next((i + 1 for i, r in enumerate(hybrid_results) if r.chunk_id == gold_chunk_id), None)
+                results["level4"]["gold_rank"] = hybrid_rank
+                results["level4"]["recall"] = 1 if hybrid_rank and hybrid_rank <= top_k else 0
+
+        except Exception as e:
+            logger.error(f"Hybrid retrieval failed: {e}")
+            results["level4"] = {"error": str(e)}
 
         # Save results
         if save_results:
@@ -645,9 +672,6 @@ class TestMMRAG:
         """Build RAG prompt for VLM."""
         prompt_text = f"""Based on the following retrieved documents, please answer the question.
 
-Retrieved Documents:
-{context}
-
 Question: {query}
 
 Please provide a comprehensive answer based on the retrieved documents."""
@@ -658,6 +682,7 @@ Please provide a comprehensive answer based on the retrieved documents."""
         if image_paths:
             from MMRAG.utils import encode_image_paths_to_base64
             image_content = encode_image_paths_to_base64(image_paths)
+            content.append({"text": context})
             content.extend(image_content)
 
         content.append({"type": "text", "text": prompt_text})
@@ -741,11 +766,11 @@ async def main():
             logger.info("=" * 60)
             logger.info("Running Retrieval Performance Test")
             logger.info("=" * 60)
-            metrics = await tester.test_retrieval_performance(
-                dataset_name=args.dataset,
-                dataset_size=args.dataset_size
-            )
-            print(f"\nFinal Results: {metrics}\n")
+            # metrics = await tester.test_retrieval_performance(
+            #     dataset_name=args.dataset,
+            #     dataset_size=args.dataset_size
+            # )
+            # print(f"\nFinal Results: {metrics}\n")
 
         if args.test in ["e2e", "all"]:
             logger.info("=" * 60)
